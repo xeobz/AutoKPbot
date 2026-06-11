@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/autokpbot
-ExecStart=/usr/bin/python3 backend/bot.py
+ExecStart=/opt/autokpbot/venv/bin/python backend/bot.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
