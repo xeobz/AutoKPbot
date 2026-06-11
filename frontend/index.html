@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoKP — Генератор коммерческих предложений</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+
+  .header { background: #1a1d2e; border-bottom: 1px solid #2d3148; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+  .header h1 { font-size: 20px; font-weight: 700; color: #fff; }
+  .header span { font-size: 13px; color: #6b7280; }
+
+  .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+
+  .card { background: #1a1d2e; border: 1px solid #2d3148; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  .card h2 { font-size: 14px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
+
+  .url-row { display: flex; gap: 12px; }
+  .url-input { flex: 1; background: #0f1117; border: 1px solid #374151; border-radius: 8px; padding: 12px 16px; font-size: 14px; color: #e2e8f0; outline: none; }
+  .url-input:focus { border-color: #6366f1; }
+  .url-input::placeholder { color: #4b5563; }
+
+  .btn { padding: 12px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; }
+  .btn-primary { background: #6366f1; color: #fff; }
+  .btn-primary:hover { background: #4f46e5; }
+  .btn-primary:disabled { background: #374151; color: #6b7280; cursor: not-allowed; }
+  .btn-secondary { background: #1f2937; color: #9ca3af; border: 1px solid #374151; }
+  .btn-secondary:hover { background: #374151; color: #e2e8f0; }
+  .btn-sm { padding: 6px 14px; font-size: 12px; }
+
+  .params-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  .field label { display: block; font-size: 11px; color: #6b7280; margin-bottom: 6px; font-weight: 500; }
+  .field input { width: 100%; background: #0f1117; border: 1px solid #374151; border-radius: 6px; padding: 8px 12px; font-size: 13px; color: #e2e8f0; outline: none; }
+  .field input:focus { border-color: #6366f1; }
+
+  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 768px) { .result-grid { grid-template-columns: 1fr; } }
+
+  .photos-carousel { position: relative; overflow: hidden; border-radius: 8px; background: #0f1117; aspect-ratio: 16/9; margin-bottom: 16px; }
+  .photos-carousel img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.3s; }
+  .photos-carousel img.active { opacity: 1; }
+  .carousel-nav { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .carousel-dot { width: 8px; height: 8px; border-radius: 50%; background: #374151; cursor: pointer; border: none; transition: background 0.2s; }
+  .carousel-dot.active { background: #6366f1; }
+  .carousel-counter { text-align: center; font-size: 11px; color: #6b7280; margin-bottom: 12px; }
+
+  .kp-text-wrapper { position: relative; }
+  .kp-text { background: #0f1117; border: 1px solid #2d3148; border-radius: 8px; padding: 16px; font-size: 13px; line-height: 1.7; white-space: pre-wrap; max-height: 480px; overflow-y: auto; color: #d1d5db; }
+  .copy-btn-wrapper { display: flex; justify-content: flex-end; margin-top: 8px; }
+
+  .table-section { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: #111827; color: #6b7280; text-align: left; padding: 10px 12px; font-weight: 500; border-bottom: 1px solid #2d3148; white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid #1f2937; color: #d1d5db; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  .highlight { color: #6ee7b7; font-weight: 600; }
+
+  .loader { display: none; align-items: center; gap: 10px; color: #6b7280; font-size: 14px; }
+  .loader.active { display: flex; }
+  .spinner { width: 20px; height: 20px; border: 2px solid #374151; border-top-color: #6366f1; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .error-box { background: #1f1014; border: 1px solid #7f1d1d; border-radius: 8px; padding: 14px 16px; color: #fca5a5; font-size: 13px; display: none; }
+  .error-box.active { display: block; }
+
+  .hidden { display: none !important; }
+
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .badge-green { background: #064e3b; color: #6ee7b7; }
+  .badge-blue { background: #1e3a5f; color: #93c5fd; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <span style="font-size:22px;">🚗</span>
+  <h1>AutoKP Generator</h1>
+  <span>mobile.de → Коммерческое предложение</span>
+</div>
+
+<div class="container">
+
+  <!-- URL + Settings -->
+  <div class="card">
+    <h2>Ссылка на объявление</h2>
+    <div class="url-row" style="margin-bottom:16px;">
+      <input class="url-input" id="urlInput" type="url" placeholder="https://www.mobile.de/ru/...?id=..." />
+      <button class="btn btn-primary" id="parseBtn" onclick="startParse()">Сформировать КП</button>
+    </div>
+
+    <h2>Параметры расчёта</h2>
+    <div class="params-grid">
+      <div class="field">
+        <label>Курс EUR/RUB</label>
+        <input type="number" id="rate" value="97" step="0.1" />
+      </div>
+      <div class="field">
+        <label>Таможня РБ, %</label>
+        <input type="number" id="customsPct" value="15" step="0.1" />
+      </div>
+      <div class="field">
+        <label>Утиль, руб.</label>
+        <input type="number" id="utilRub" value="4500000" step="1000" />
+      </div>
+      <div class="field">
+        <label>ЭПТС, руб.</label>
+        <input type="number" id="eptsRub" value="50000" step="1000" />
+      </div>
+      <div class="field">
+        <label>Контакт</label>
+        <input type="text" id="contact" value="@Aleksandr_Montaro" />
+      </div>
+      <div class="field">
+        <label>Номер лота (#)</label>
+        <input type="text" id="lotNumber" value="0001" />
+      </div>
+    </div>
+  </div>
+
+  <!-- Loader & Error -->
+  <div class="loader" id="loader">
+    <div class="spinner"></div>
+    <span id="loaderText">Парсим страницу...</span>
+  </div>
+  <div class="error-box" id="errorBox"></div>
+
+  <!-- Results -->
+  <div id="resultsSection" class="hidden">
+
+    <!-- KP + Photos -->
+    <div class="result-grid">
+      <div class="card">
+        <h2>Фотографии <span id="photoCount" class="badge badge-blue"></span></h2>
+        <div class="photos-carousel" id="carousel"></div>
+        <div class="carousel-nav" id="carouselNav"></div>
+        <div class="carousel-counter" id="carouselCounter"></div>
+      </div>
+
+      <div class="card">
+        <h2>Коммерческое предложение</h2>
+        <div class="kp-text-wrapper">
+          <div class="kp-text" id="kpText"></div>
+        </div>
+        <div class="copy-btn-wrapper">
+          <button class="btn btn-secondary btn-sm" onclick="copyKP()">Скопировать текст КП</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h2>Строка для Google Sheets</h2>
+        <button class="btn btn-secondary btn-sm" onclick="copyTableRow()">Скопировать строку (TSV)</button>
+      </div>
+      <div class="table-section">
+        <table id="resultTable">
+          <thead>
+            <tr>
+              <th>Марка</th><th>Модель</th><th>Год</th><th>Пробег</th><th>Цвет</th>
+              <th>Цена EUR</th><th>Курс</th><th>Таможня %</th><th>Авто+тамож EUR</th>
+              <th>Под ключ RUB</th><th>Утиль RUB</th><th>ЭПТС RUB</th><th>Итого RUB</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const API = 'http://localhost:8001';
+let currentCarouselIndex = 0;
+let currentPhotos = [];
+let currentTableData = null;
+
+async function startParse() {
+  const url = document.getElementById('urlInput').value.trim();
+  if (!url) { showError('Введите ссылку на объявление mobile.de'); return; }
+
+  const btn = document.getElementById('parseBtn');
+  const loader = document.getElementById('loader');
+  const errorBox = document.getElementById('errorBox');
+  const results = document.getElementById('resultsSection');
+
+  btn.disabled = true;
+  errorBox.classList.remove('active');
+  results.classList.add('hidden');
+  loader.classList.add('active');
+  setLoaderText('Парсим страницу mobile.de...');
+
+  try {
+    const body = {
+      url,
+      rate: parseFloat(document.getElementById('rate').value),
+      customs_pct: parseFloat(document.getElementById('customsPct').value),
+      util_rub: parseFloat(document.getElementById('utilRub').value),
+      epts_rub: parseFloat(document.getElementById('eptsRub').value),
+      contact: document.getElementById('contact').value,
+      lot_number: document.getElementById('lotNumber').value,
+    };
+
+    setLoaderText('Извлекаем данные и генерируем КП через AI...');
+    const resp = await fetch(`${API}/parse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || 'Ошибка сервера');
+    }
+
+    const data = await resp.json();
+    renderResults(data);
+
+  } catch (e) {
+    showError(e.message || 'Неизвестная ошибка');
+  } finally {
+    btn.disabled = false;
+    loader.classList.remove('active');
+  }
+}
+
+function renderResults(data) {
+  // Photos
+  currentPhotos = data.photos || [];
+  currentCarouselIndex = 0;
+  renderCarousel();
+
+  // KP text
+  document.getElementById('kpText').textContent = data.kp_text;
+
+  // Table
+  const tr = data.table_row;
+  currentTableData = tr;
+  const fmt = n => Math.round(n).toLocaleString('ru-RU');
+  document.getElementById('tableBody').innerHTML = `
+    <tr>
+      <td>${tr.make}</td>
+      <td>${tr.model}</td>
+      <td>${tr.year}</td>
+      <td>${tr.mileage}</td>
+      <td>${tr.color || '—'}</td>
+      <td>${fmt(tr.price_eur)}</td>
+      <td>${tr.rate}</td>
+      <td>${tr.customs_pct}%</td>
+      <td>${fmt(tr.customs_eur)}</td>
+      <td>${fmt(tr.turnkey_rub)}</td>
+      <td>${fmt(tr.util_rub)}</td>
+      <td>${fmt(tr.epts_rub)}</td>
+      <td class="highlight">${fmt(tr.total_rub)}</td>
+    </tr>`;
+
+  document.getElementById('resultsSection').classList.remove('hidden');
+  document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });
+}
+
+function renderCarousel() {
+  const container = document.getElementById('carousel');
+  const nav = document.getElementById('carouselNav');
+  const counter = document.getElementById('carouselCounter');
+  const countBadge = document.getElementById('photoCount');
+
+  container.innerHTML = '';
+  nav.innerHTML = '';
+
+  if (!currentPhotos.length) {
+    container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#4b5563;font-size:14px;">Фото не найдены</div>';
+    countBadge.textContent = '0 фото';
+    return;
+  }
+
+  countBadge.textContent = `${currentPhotos.length} фото`;
+
+  currentPhotos.forEach((url, i) => {
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = `Фото ${i + 1}`;
+    if (i === 0) img.classList.add('active');
+    container.appendChild(img);
+
+    const dot = document.createElement('button');
+    dot.className = 'carousel-dot' + (i === 0 ? ' active' : '');
+    dot.onclick = () => showPhoto(i);
+    nav.appendChild(dot);
+  });
+
+  updateCarouselCounter();
+}
+
+function showPhoto(index) {
+  const imgs = document.getElementById('carousel').querySelectorAll('img');
+  const dots = document.getElementById('carouselNav').querySelectorAll('.carousel-dot');
+  imgs.forEach((img, i) => img.classList.toggle('active', i === index));
+  dots.forEach((dot, i) => dot.classList.toggle('active', i === index));
+  currentCarouselIndex = index;
+  updateCarouselCounter();
+}
+
+function updateCarouselCounter() {
+  document.getElementById('carouselCounter').textContent =
+    currentPhotos.length ? `${currentCarouselIndex + 1} / ${currentPhotos.length}` : '';
+}
+
+function copyKP() {
+  const text = document.getElementById('kpText').textContent;
+  navigator.clipboard.writeText(text).then(() => flashBtn('Скопировано!'));
+}
+
+function copyTableRow() {
+  if (!currentTableData) return;
+  const tr = currentTableData;
+  const cols = [
+    tr.make, tr.model, tr.year, tr.mileage, tr.color || '',
+    Math.round(tr.price_eur), tr.rate, tr.customs_pct + '%',
+    Math.round(tr.customs_eur), Math.round(tr.turnkey_rub),
+    Math.round(tr.util_rub), Math.round(tr.epts_rub), Math.round(tr.total_rub)
+  ];
+  navigator.clipboard.writeText(cols.join('\t')).then(() => {
+    flashBtn('Строка скопирована — вставьте в Google Sheets!');
+  });
+}
+
+function flashBtn(msg) {
+  // Simple feedback via title
+  const prev = document.title;
+  document.title = '✓ ' + msg;
+  setTimeout(() => document.title = prev, 2000);
+}
+
+function showError(msg) {
+  const box = document.getElementById('errorBox');
+  box.textContent = '⚠ ' + msg;
+  box.classList.add('active');
+}
+
+function setLoaderText(t) {
+  document.getElementById('loaderText').textContent = t;
+}
+
+// Allow Enter key in URL field
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('urlInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') startParse();
+  });
+});
+</script>
+</body>
+</html>

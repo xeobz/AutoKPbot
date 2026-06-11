@@ -1,0 +1,15 @@
+[Unit]
+Description=AutoKP Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/autokpbot
+ExecStart=/usr/bin/python3 backend/bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+# Secrets — никогда не пушить
+.env
+backend/credentials.json
+key.json
+
+# База данных бота
+backend/bot_data.db
+bot_data.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Логи
+*.log
+bot_output.log
+bot_error.log
+bot_err.log
+
+# Временные файлы
+*.xlsx
+xlsx_temp/
+debug_page.html
+backend/debug_scrape.py
+backend/test_regex.py
+
+# IDE
+.vscode/
+.idea/
+.claude/

@@ -1,0 +1,43 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+
+            cd /opt/autokpbot
+            git pull origin main
+
+            # ── Записываем .env из GitHub Secrets ───────────────────────────
+            cat > .env <<EOF
+            OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+            TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+            ADMIN_TELEGRAM_ID=${{ secrets.ADMIN_TELEGRAM_ID }}
+            GOOGLE_SHEET_ID=${{ secrets.GOOGLE_SHEET_ID }}
+            GOOGLE_SHEET_TAB=${{ secrets.GOOGLE_SHEET_TAB }}
+            GOOGLE_CREDENTIALS=credentials.json
+            EOF
+
+            # ── Записываем credentials.json из base64-secret ───────────────
+            echo "${{ secrets.GOOGLE_CREDENTIALS_B64 }}" | base64 -d > backend/credentials.json
+
+            # ── Обновляем зависимости ───────────────────────────────────────
+            pip install -r backend/requirements.txt -q
+
+            # ── Перезапускаем бота ──────────────────────────────────────────
+            systemctl restart autokpbot
+            echo "✅ Деплой завершён. Статус:"
+            systemctl is-active autokpbot
