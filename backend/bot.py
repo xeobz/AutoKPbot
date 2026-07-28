@@ -1654,6 +1654,9 @@ def main() -> None:
     app.add_handler(conv)
 
     print("Bot started. Press Ctrl+C to stop.")
+    # Python 3.14: get_event_loop() больше не создаёт loop автоматически,
+    # а PTB 21.6 на него рассчитывает — создаём явно.
+    asyncio.set_event_loop(asyncio.new_event_loop())
     app.run_polling(drop_pending_updates=True)
 
 
