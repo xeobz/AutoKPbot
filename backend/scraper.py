@@ -346,6 +346,84 @@ async def _fetch_html_async(url: str, warmup_url: str, blocked_markers: tuple[st
     return html
 
 
+def _repair_non_utf8_sources(package: str = "nodriver") -> list[str]:
+    """
+    Чинит исходники пакета, которые не читаются как UTF-8.
+
+    nodriver 0.50.3 поставляет cdp/network.py, где «±» записан одним байтом
+    0xB1 (latin-1). Python 3 читает исходники только как UTF-8, поэтому
+    `import nodriver` падает с SyntaxError, и парсер не работает вообще.
+    На машинах, где рядом оказался готовый .pyc, проблема незаметна —
+    поэтому её легко не увидеть при разработке.
+
+    Заменяем одиночные «высокие» байты на их корректную UTF-8 запись,
+    не трогая уже валидные последовательности. Возвращает список починенных
+    файлов (пустой, если чинить нечего).
+    """
+    import importlib.util
+    import os
+    import tempfile
+    from pathlib import Path as _Path
+
+    try:
+        spec = importlib.util.find_spec(package)      # не выполняет пакет
+        if not spec or not spec.origin:
+            return []
+        root = _Path(spec.origin).parent
+    except Exception:
+        return []
+
+    fixed: list[str] = []
+    for path in root.rglob("*.py"):
+        try:
+            data = path.read_bytes()
+            data.decode("utf-8")
+            continue                                   # файл в порядке
+        except UnicodeDecodeError:
+            pass
+        except OSError:
+            continue
+
+        out = bytearray()
+        i = 0
+        while i < len(data):
+            b = data[i]
+            if b < 0x80:
+                out.append(b)
+                i += 1
+                continue
+            for length in (2, 3, 4):                   # валидная UTF-8 последовательность?
+                chunk = data[i:i + length]
+                try:
+                    chunk.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+                out += chunk
+                i += length
+                break
+            else:                                       # одиночный байт — это latin-1
+                out += chr(b).encode("utf-8")
+                i += 1
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=path.parent, delete=False, suffix=".tmp"
+            ) as tmp:
+                tmp.write(bytes(out))
+                tmp_name = tmp.name
+            os.replace(tmp_name, path)
+            # старый байт-код мог остаться от прошлой версии файла
+            cache = path.parent / "__pycache__"
+            if cache.is_dir():
+                for pyc in cache.glob(f"{path.stem}.*.pyc"):
+                    pyc.unlink(missing_ok=True)
+            fixed.append(str(path))
+        except OSError:
+            continue                                    # нет прав на запись — оставляем как есть
+
+    return fixed
+
+
 def _browser_worker(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
                     out_path: str, err_path: str) -> None:
     """
@@ -368,6 +446,9 @@ def _browser_worker(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
 
     code = 1
     try:
+        # Библиотека может приехать с исходником, который Python не прочитает
+        _repair_non_utf8_sources("nodriver")
+
         # На Windows нужен именно Proactor: Selector-цикл не умеет запускать
         # подпроцессы, и Chrome не стартует.
         if _sys.platform == "win32" and hasattr(_asyncio, "ProactorEventLoop"):

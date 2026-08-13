@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import html as html_lib
 import json
+import logging
 import os
 import re
 import time
@@ -67,6 +68,8 @@ from storage import (
     set_setting,
     update_history_data,
 )
+
+log = logging.getLogger("autokp.web")
 
 TOKEN       = os.getenv("TELEGRAM_BOT_TOKEN", "")
 DEV_MODE    = os.getenv("WEB_DEV_MODE", "") == "1"
@@ -309,6 +312,7 @@ async def parse(req: ParseReq, user: dict = Depends(current_user)):
     try:
         scraped = await scrape(url)
     except Exception as e:
+        log.exception("Не удалось разобрать объявление: %s", url)
         raise HTTPException(502, f"Не удалось загрузить объявление: {e}")
 
     if not scraped.get("price_eur"):
