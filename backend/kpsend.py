@@ -7,7 +7,7 @@ from telegram import InputMediaPhoto
 
 from ai import shorten_options
 from calc import total_rub
-from kp import brand_of, build_kp_text
+from kp import brand_candidates, build_kp_text
 from storage import get_brand_emoji, get_float, get_setting
 
 CONTACT = "@Aleksandr_Montaro"
