@@ -1,6 +1,8 @@
 """
 Сборка и отправка КП в Telegram — общее для бота и веб-API.
 """
+import logging
+
 from telegram import InputMediaPhoto
 
 from ai import shorten_options
@@ -12,6 +14,19 @@ CONTACT = "@Aleksandr_Montaro"
 
 # Сколько опций максимум просим у ИИ — лишние всё равно срежет лимит подписи
 MAX_OPTION_LINES = 14
+
+log = logging.getLogger("autokp.kp")
+
+
+def _telegram_photo(url: str) -> str:
+    """
+    Telegram не принимает webp как фотографию. autoscout24 отдаёт превью
+    в webp — подменяем на jpeg. Нужно и для старых записей в истории,
+    сохранённых до правки парсера.
+    """
+    if url.endswith(".webp") and "autoscout24" in url:
+        return url[: -len(".webp")] + ".jpg"
+    return url
 
 
 def pick_photos(all_photos: list[str]) -> list[str]:
@@ -84,7 +99,7 @@ async def send_kp(
     caption, caption_plain = await build_captions(d, car_num, contact)
 
     all_photos = d.get("photos", []) or []
-    chosen     = list(photos) if photos else pick_photos(all_photos)
+    chosen     = [_telegram_photo(u) for u in (photos or pick_photos(all_photos))]
 
     async def _send(text: str) -> list[int]:
         if len(chosen) == 1:
@@ -106,12 +121,14 @@ async def send_kp(
 
     try:
         photo_msg_ids = await _send(caption)
-    except Exception:
+    except Exception as first:
         # Чаще всего причина — премиум-эмодзи: повторяем обычным текстом
+        log.warning("КП с премиум-эмодзи не ушло (%s), пробую обычным текстом", first)
         try:
             caption = caption_plain
             photo_msg_ids = await _send(caption)
-        except Exception:
+        except Exception as second:
+            log.warning("Альбом не ушёл (%s), пробую одним фото", second)
             msg = await bot.send_photo(
                 chat_id=chat_id, photo=chosen[0], caption=caption, parse_mode="HTML"
             )

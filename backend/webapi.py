@@ -381,11 +381,13 @@ async def _send(chat_id: int, car_num, d: dict, photos: list[str] | None) -> boo
     """Отправка КП в телеграм. Ошибку отправки не считаем провалом записи."""
     bot = _bot()
     if bot is None:
+        log.error("КП #%s не отправлено: бот не инициализирован", car_num)
         return False
     try:
         await send_kp(bot, chat_id, car_num, d, photos=photos or None)
         return True
     except Exception:
+        log.exception("КП #%s не отправлено в чат %s", car_num, chat_id)
         return False
 
 

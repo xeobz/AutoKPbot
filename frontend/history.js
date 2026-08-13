@@ -20,7 +20,9 @@ export function renderHistory(root) {
   // Возврат на вкладку показывает список — но не выкидываем из карточки, если есть несохранённые правки
   if (st.openId && !Object.keys(st.edits).length) { st.openId = null; st.detail = null; }
   render();
-  if (!st.list && !st.listLoading) loadList();
+  // Список перечитываем при каждом заходе: пока пользователь считал в соседней
+  // вкладке, там появилась новая запись — иначе история выглядит пустой
+  if (!st.listLoading) loadList();
 }
 
 function render() {

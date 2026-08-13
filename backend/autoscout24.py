@@ -141,6 +141,16 @@ def _extract_next_data(html: str) -> dict:
 
 # ── Разбор отдельных полей ───────────────────────────────────────────────────
 
+def to_jpeg_url(url: str) -> str:
+    """
+    autoscout24 отдаёт превью в webp, а Telegram webp как фотографию не
+    принимает — КП уходит без фото. Тот же адрес с .jpg отдаёт jpeg.
+    """
+    if url.endswith(".webp"):
+        return url[: -len(".webp")] + ".jpg"
+    return url
+
+
 def _parse_photos(listing: dict) -> list[str]:
     """
     Фото галереи. У autoscout24 images — готовые абсолютные ссылки
@@ -159,6 +169,7 @@ def _parse_photos(listing: dict) -> list[str]:
             url = _as_text(item.get("src") or item.get("url") or item.get("large"))
         else:
             url = ""
+        url = to_jpeg_url(url)
         if url.startswith("http") and url not in seen:
             seen.add(url)
             urls.append(url)
@@ -166,7 +177,7 @@ def _parse_photos(listing: dict) -> list[str]:
     if not urls:
         header = _as_text(listing.get("headerImage"))
         if header.startswith("http"):
-            urls.append(header)
+            urls.append(to_jpeg_url(header))
     return urls
 
 
