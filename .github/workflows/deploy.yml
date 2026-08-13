@@ -30,6 +30,7 @@ jobs:
             GOOGLE_SHEET_ID=${{ secrets.GOOGLE_SHEET_ID }}
             GOOGLE_SHEET_TAB=${{ secrets.GOOGLE_SHEET_TAB }}
             GOOGLE_CREDENTIALS=credentials.json
+            WEB_APP_URL=${{ secrets.WEB_APP_URL }}
             EOF
 
             # ── Записываем credentials.json из base64-secret ───────────────
@@ -38,7 +39,9 @@ jobs:
             # ── Обновляем зависимости ───────────────────────────────────────
             /opt/autokpbot/venv/bin/pip install -r backend/requirements.txt -q
 
-            # ── Перезапускаем бота ──────────────────────────────────────────
+            # ── Перезапускаем бота и мини-апп ──────────────────────────────
             systemctl restart autokpbot
+            systemctl restart autokpweb || echo "⚠️ autokpweb не установлен — см. DEPLOY.md"
             echo "✅ Деплой завершён. Статус:"
             systemctl is-active autokpbot
+            systemctl is-active autokpweb || true

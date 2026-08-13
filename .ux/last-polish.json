@@ -1,0 +1,47 @@
+{
+  "command": "ux-polish",
+  "timestamp": "2026-08-13T22:10:00+03:00",
+  "surface": "C:/Code/ПроектСаши/frontend — Telegram Mini App (Montaro)",
+  "brand": {
+    "name": "Montaro",
+    "wordmark": "MONTARO",
+    "tagline": "Авто из Европы",
+    "accent_dark": "#d8a341",
+    "accent_light": "#8a611f",
+    "contrast_accent_on_bg": { "dark": 7.17, "light": 5.51 }
+  },
+  "lint_delta": {
+    "score": { "before": 87, "after": 96 },
+    "critical": { "before": 1, "after": 0 },
+    "high": { "before": 8, "after": 1 },
+    "medium": { "before": 9, "after": 9 },
+    "low": { "before": 2, "after": 1 },
+    "total": { "before": 20, "after": 11 }
+  },
+  "applied": [
+    { "lens": "RECOVER", "severity": "Critical", "title": "focus-visible кольцо на всех интерактивных элементах", "verified": "Tab по настройкам → outline solid 2px rgb(216,163,65), offset 2px" },
+    { "lens": "RECOVER", "severity": "High", "title": "Подтверждение перед необратимой отправкой", "verified": "первое нажатие показывает сводку, кнопка меняется на «Подтвердить и отправить»" },
+    { "lens": "RECOVER", "severity": "Medium", "title": "100dvh вместо 100vh", "verified": "линтер: правило h-screen-no-dvh-fallback снято" },
+    { "lens": "RECOVER", "severity": "Medium", "title": "prefers-reduced-motion останавливает анимации, а не замедляет", "verified": "глобальное правило + статичная полоска" },
+    { "lens": "FRAME", "severity": "High", "title": "Айдентика Montaro: вордмарк, монограмма, title, favicon", "verified": "title «Montaro — расчёт и КП», шапка MONTARO / Авто из Европы" },
+    { "lens": "DISCOVER", "severity": "High", "title": "Эмодзи заменены на SVG, подписи расчёта очищены", "verified": "на экране 0 эмодзи, 4 инлайн-SVG" },
+    { "lens": "DISCOVER", "severity": "Medium", "title": "Подсказка про обе площадки под полем ссылки", "verified": "текст «Подходят mobile.de и autoscout24»" },
+    { "lens": "SCAN", "severity": "High", "title": "Расчёт свёрнут до 3 строк + «Подробности» + доминирующий итог", "verified": "18 строк → 3, раскрытие даёт 17 строк с группами" },
+    { "lens": "SCAN", "severity": "Medium", "title": "Группы вместо пустых строк-разделителей", "verified": "СТОИМОСТЬ В ЕВРО / ПЕРЕВОД В РУБЛИ / РАСХОДЫ В РОССИИ" },
+    { "lens": "SCAN", "severity": "Medium", "title": "Превью фото 4:3 вместо квадрата", "verified": "линтер: aspect-ratio-1-1-default снято" },
+    { "lens": "ACT", "severity": "Medium", "title": "Выкуп чипами: процент крупно, сумма подписью", "verified": "минималка схлопнута в один чип на живых данных" },
+    { "lens": "ACT", "severity": "Medium", "title": "Состояния нажатия 120мс на кнопках, чипах, фото", "verified": "transform scale на :active" },
+    { "lens": "ACT", "severity": "Cosmetic", "title": "Галерея auto-fill вместо repeat(3, 1fr)", "verified": "линтер: grid-cols-3-1fr-default снято" },
+    { "lens": "READ", "severity": "Medium", "title": "Плейсхолдер «Иван» + пояснение про имя менеджера", "verified": "видно в шаге 3" },
+    { "lens": "READ", "severity": "Medium", "title": "Шаг «Поля» → «Таможня и расходы»", "verified": "заголовок шага 6" },
+    { "lens": "READ", "severity": "Medium", "title": "«ОК» → «Сохранить», активна только у изменённого значения", "verified": "13 кнопок, все disabled до правки" },
+    { "lens": "READ", "severity": "Cosmetic", "title": "Номер лота в предпросмотре «#—» вместо «#000»", "verified": "предпросмотр показывает #—" },
+    { "lens": "READ", "severity": "Cosmetic", "title": "Процент выкупа без хвоста «.0»", "verified": "«Выкуп 12%» вместо «Выкуп 12.0%»" }
+  ],
+  "accepted_lint_noise": [
+    "imagery-mandatory-missing — index.html это пустая оболочка SPA, фото объявления вставляет JS",
+    "animation-duration-too-long — бесконечный индикатор загрузки, не микровзаимодействие; при reduced-motion остановлен",
+    "fixed-height-text-block — оставшиеся случаи это min-height, содержимое может расти",
+    "loader-spinner-border-default — обычный спиннер, осознанно"
+  ]
+}

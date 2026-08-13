@@ -1,11 +1,145 @@
+"""
+Парсер объявлений: mobile.de (все локали) + autoscout24 (.ru/.com/.de/…).
+
+Публичная точка входа — scrape(url). Возвращает единый словарь:
+    photos, all_photos, price_eur, make, model, title, year, mileage,
+    color, features, power_hp, engine_l, fuel, gearbox
+"""
 import re
+
 from bs4 import BeautifulSoup
 
 _FEAT_RE = re.compile(r'\\"li\\",\\"([^\\"]{2,80})\\",\{\\"className\\":\\"CheckList')
 _ATTR_RE = re.compile(r'\\"tag\\":\\"([^\\"]+)\\",\\"value\\":\\"([^\\"]+)\\"')
+# Полное название объявления: ...,"title":"Volkswagen Tiguan Elegance 1,5 l eHybrid","url":"https://suchen.mobile.de/...
+_TITLE_RE = re.compile(
+    r'\\"title\\":\\"([^\\"]{5,140})\\",\\"url\\":\\"https://[\w.\-]*mobile\.de'
+)
 
 
-# ── RSC helpers ───────────────────────────────────────────────────────────────
+# ── Определение источника и нормализация ссылок ──────────────────────────────
+
+MOBILE_DE_RE = re.compile(r"https?://[\w.\-]*mobile\.de/[^\s<>\"']+", re.IGNORECASE)
+AUTOSCOUT_RE = re.compile(
+    r"https?://[\w.\-]*autoscout24\.[a-z]{2,3}(?:\.[a-z]{2,3})?/[^\s<>\"']+", re.IGNORECASE
+)
+
+# id объявления mobile.de: ?id=459974296  или  /auto-inserat/<slug>/459974296.html
+_MDE_ID_QUERY = re.compile(r"[?&]id=(\d{6,})")
+_MDE_ID_PATH  = re.compile(r"/(\d{6,})\.html")
+
+# Канонический русский URL детальной страницы (транспортные-средства/подробности.html)
+_MDE_RU_URL = (
+    "https://www.mobile.de/ru/"
+    "%D1%82%D1%80%D0%B0%D0%BD%D1%81%D0%BF%D0%BE%D1%80%D1%82%D0%BD%D1%8B%D0%B5-"
+    "%D1%81%D1%80%D0%B5%D0%B4%D1%81%D1%82%D0%B2%D0%B0/"
+    "%D0%BF%D0%BE%D0%B4%D1%80%D0%BE%D0%B1%D0%BD%D0%BE%D1%81%D1%82%D0%B8.html?id={id}"
+)
+
+SOURCE_MOBILE_DE  = "mobile_de"
+SOURCE_AUTOSCOUT  = "autoscout24"
+
+
+def normalise_mobile_de(url: str) -> str:
+    """
+    Любую ссылку mobile.de приводим к русской детальной странице.
+    Поддерживаются форматы:
+      • https://www.mobile.de/ru/…/подробности.html?id=459974296
+      • https://suchen.mobile.de/fahrzeuge/details.html?id=459974296
+      • https://suchen.mobile.de/auto-inserat/<slug>/459974296.html   (новый)
+    Если id не нашли — возвращаем ссылку как есть (браузер сам отдаст /ru,
+    т.к. заходим с русской локалью).
+    """
+    m = _MDE_ID_QUERY.search(url) or _MDE_ID_PATH.search(url)
+    if m:
+        return _MDE_RU_URL.format(id=m.group(1))
+    return url
+
+
+def detect_source(url: str) -> str | None:
+    if MOBILE_DE_RE.match(url) or "mobile.de/" in url.lower():
+        return SOURCE_MOBILE_DE
+    if AUTOSCOUT_RE.match(url) or "autoscout24." in url.lower():
+        return SOURCE_AUTOSCOUT
+    return None
+
+
+def find_listing_url(text: str) -> tuple[str, str] | None:
+    """
+    Ищет в тексте ссылку на объявление. Возвращает (нормализованный_url, источник)
+    или None. Первой проверяется mobile.de, затем autoscout24.
+    """
+    m = MOBILE_DE_RE.search(text or "")
+    if m:
+        return normalise_mobile_de(m.group(0)), SOURCE_MOBILE_DE
+    m = AUTOSCOUT_RE.search(text or "")
+    if m:
+        return m.group(0), SOURCE_AUTOSCOUT
+    return None
+
+
+# ── Нормализация значений (общая для обоих источников) ───────────────────────
+
+def normalise_fuel(raw: str) -> str:
+    """«Гибрид (бензин/электричество), Подключаемый гибрид» → «Гибрид»."""
+    s = (raw or "").lower()
+    if not s:
+        return ""
+    if "гибрид" in s or "hybrid" in s or "/бензин" in s or "бензин/" in s:
+        return "Гибрид"
+    if "дизель" in s or "diesel" in s:
+        return "Дизель"
+    if "электро" in s or "electric" in s or "elektro" in s:
+        return "Электро"
+    if any(g in s for g in ("газ", "lpg", "cng", "автогаз")):
+        return "Газ"
+    if "бензин" in s or "petrol" in s or "benzin" in s or "super" in s or "95" in s:
+        return "Бензин"
+    return raw.split(",")[0].strip()
+
+
+def normalise_gearbox(raw: str) -> str:
+    s = (raw or "").lower()
+    if not s:
+        return ""
+    if "автомат" in s or "automat" in s or "dsg" in s:
+        return "Автомат"
+    if "механ" in s or "manual" in s or "schalt" in s:
+        return "Механика"
+    return raw.strip()
+
+
+def parse_engine_litres(*sources: str) -> float | None:
+    """Достаёт объём двигателя: «1,5 l», «2.0 TDI», «1 395 см³» → 1.5 / 2.0 / 1.4."""
+    for src in sources:
+        if not src:
+            continue
+        # «1 395 см³» / «1395 ccm»
+        m = re.search(r"(\d[\d\s\xa0]{2,6})\s*(?:см³|ccm|cm³|cc)\b", src, re.IGNORECASE)
+        if m:
+            ccm = int(re.sub(r"\D", "", m.group(1)))
+            if 600 <= ccm <= 9000:
+                return round(ccm / 1000, 1)
+        # «1,5 l» / «2.0 TDI» / «1.5 TSI»
+        m = re.search(r"\b(\d[.,]\d)\s*(?:l\b|л\b|liter|литр|tsi|tdi|tfsi|dci|cdi|hdi)", src, re.IGNORECASE)
+        if m:
+            return float(m.group(1).replace(",", "."))
+    return None
+
+
+def parse_power_hp(*sources: str) -> int | None:
+    """«110 кВт (150 л. с.)» → 150; «245 л.с.» → 245; «150 PS» → 150."""
+    for src in sources:
+        if not src:
+            continue
+        s = src.replace("\xa0", " ")
+        m = re.search(r"(\d{2,4})\s*(?:л\.?\s?с\.?|hp|ps|bhp)", s, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+# ── mobile.de: разбор RSC-пейлоада ───────────────────────────────────────────
 
 def _collect_rsc(soup: BeautifulSoup) -> str:
     parts = []
@@ -44,20 +178,23 @@ def _extract_title_info(soup: BeautifulSoup) -> tuple[str, str, float | None]:
     return "", "", None
 
 
+def _extract_full_title(rsc: str) -> str:
+    """Полное название объявления: «Volkswagen Tiguan Elegance 1,5 l eHybrid 6-Gang-DSG»."""
+    m = _TITLE_RE.search(rsc)
+    if m:
+        return re.sub(r"\s{2,}", " ", m.group(1)).strip()
+    return ""
+
+
 def _uid_to_url(uid: str) -> str:
     return f"https://img.classistatic.de/api/v1/mo-prod/images/{uid[:2]}/{uid}?rule=mo-640.jpg"
 
 
 def _extract_images(rsc: str) -> list[str]:
     """
-    Extract car gallery images from RSC payload using cluster analysis.
-
-    Strategy: all images in the RSC are found with their byte-positions.
-    Car gallery images appear as a dense cluster (array of 10-50+ refs close
-    together), while dealer logos / badge icons appear in isolation.
-    We pick the largest cluster — that is the gallery.
-
-    Returns deduplicated URLs for that cluster only.
+    Фото галереи: все ссылки на картинки ищутся с их позициями в тексте.
+    Галерея — самый плотный кластер (массив из 10-50 ссылок рядом),
+    логотипы дилера и иконки стоят особняком. Берём самый большой кластер.
     """
     uuid_re = re.compile(
         r"img\.classistatic\.de/api/v1/mo-prod/images/[a-f0-9]{2}/([a-f0-9\-]{36})"
@@ -66,8 +203,7 @@ def _extract_images(rsc: str) -> list[str]:
     if not matches:
         return []
 
-    # Group consecutive matches that are within GAP bytes of each other
-    GAP = 800   # chars; images in the same JSON array are much closer than this
+    GAP = 800   # символов; ссылки одного JSON-массива лежат гораздо ближе
     groups: list[list[re.Match]] = []
     cur: list[re.Match] = [matches[0]]
     for m in matches[1:]:
@@ -78,7 +214,6 @@ def _extract_images(rsc: str) -> list[str]:
             cur = [m]
     groups.append(cur)
 
-    # Largest group = car gallery
     gallery = max(groups, key=len)
 
     seen: set[str] = set()
@@ -92,7 +227,7 @@ def _extract_images(rsc: str) -> list[str]:
 
 
 def _extract_all_images_flat(rsc: str) -> list[str]:
-    """Return ALL images in order of appearance — used by debug tool only."""
+    """Все картинки страницы по порядку — используется только отладкой."""
     uuid_re = re.compile(
         r"img\.classistatic\.de/api/v1/mo-prod/images/[a-f0-9]{2}/([a-f0-9\-]{36})"
     )
@@ -150,22 +285,33 @@ def _parse_html(html: str) -> dict:
         make = attrs.get("make", "")
     if not model:
         model = attrs.get("model", "")
+
+    full_title = _extract_full_title(rsc) or f"{make} {model}".strip()
+
     return {
-        "photos":     _extract_images(rsc),          # gallery cluster only (smart)
-        "all_photos": _extract_all_images_flat(rsc), # every image — for debug tool
+        "source":     SOURCE_MOBILE_DE,
+        "photos":     _extract_images(rsc),          # только кластер галереи
+        "all_photos": _extract_all_images_flat(rsc), # все картинки — для отладки
         "price_eur": price_eur,
         "make": make,
         "model": model,
+        "title": full_title,
         "year": year,
         "mileage": mileage,
         "color": color,
         "features": _extract_features(rsc),
+        "power_hp": parse_power_hp(attrs.get("power", "")),
+        "engine_l": parse_engine_litres(
+            attrs.get("cubicCapacity", ""), attrs.get("displacement", ""), full_title
+        ),
+        "fuel": normalise_fuel(attrs.get("fuel", "")),
+        "gearbox": normalise_gearbox(attrs.get("transmission", "")),
     }
 
 
-# ── Playwright scraper (primary) ──────────────────────────────────────────────
+# ── Загрузка страницы браузером (nodriver) ───────────────────────────────────
 
-async def _scrape_with_nodriver(url: str) -> dict:
+async def _fetch_html_async(url: str, warmup_url: str, blocked_markers: tuple[str, ...]) -> str:
     import asyncio
     import nodriver as uc
 
@@ -176,8 +322,9 @@ async def _scrape_with_nodriver(url: str) -> dict:
         browser_args=["--lang=ru-RU", "--no-sandbox", "--disable-dev-shm-usage"],
     )
     try:
-        # Warm up: homepage first so Cloudflare sets cookies + JS challenge resolves
-        await browser.get("https://www.mobile.de/ru/")
+        # Прогрев: сначала главная — Cloudflare ставит куки и решает JS-челлендж,
+        # заодно фиксируется русская локаль сайта.
+        await browser.get(warmup_url)
         await asyncio.sleep(5)
 
         html = ""
@@ -186,20 +333,127 @@ async def _scrape_with_nodriver(url: str) -> dict:
             wait = 6 + attempt * 4       # 6s → 10s → 14s
             await asyncio.sleep(wait)
             html = await page.get_content()
-            if "Access denied" not in html and "Zugriff verweigert" not in html:
+            if not any(marker in html for marker in blocked_markers):
                 break
             if attempt < 2:
-                await asyncio.sleep(5)   # extra pause before next attempt
+                await asyncio.sleep(5)   # пауза перед следующей попыткой
     finally:
         browser.stop()
 
-    if "Access denied" in html or "Zugriff verweigert" in html:
-        raise Exception("mobile.de отклонил запрос. Попробуй ещё раз через минуту.")
+    if any(marker in html for marker in blocked_markers):
+        raise Exception("Сайт отклонил запрос. Попробуй ещё раз через минуту.")
 
-    return _parse_html(html)
+    return html
 
 
-# ── httpx fallback scraper ────────────────────────────────────────────────────
+def _browser_worker(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
+                    out_path: str, err_path: str) -> None:
+    """
+    Тело отдельного процесса: поднимает браузер, сохраняет HTML в файл.
+
+    Почему процесс, а не поток: nodriver после закрытия браузера оставляет
+    фоновый слушатель, который в связке с новыми websockets валится в вечный
+    цикл — 80% ядра и гигабайты логов. Поток так не убить, процесс — легко.
+    Выходим через os._exit, чтобы не ждать зависшие потоки библиотеки.
+    """
+    import asyncio as _asyncio
+    import logging as _logging
+    import os as _os
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    # Библиотечный шум в journald не нужен
+    for name in ("nodriver", "websockets", "uc", "asyncio"):
+        _logging.getLogger(name).setLevel(_logging.CRITICAL)
+
+    code = 1
+    try:
+        # На Windows нужен именно Proactor: Selector-цикл не умеет запускать
+        # подпроцессы, и Chrome не стартует.
+        if _sys.platform == "win32" and hasattr(_asyncio, "ProactorEventLoop"):
+            loop = _asyncio.ProactorEventLoop()
+        else:
+            loop = _asyncio.new_event_loop()
+        _asyncio.set_event_loop(loop)
+
+        html = loop.run_until_complete(
+            _fetch_html_async(url, warmup_url, tuple(blocked_markers))
+        )
+        _Path(out_path).write_text(html, encoding="utf-8")
+        code = 0
+    except Exception as e:
+        try:
+            _Path(err_path).write_text(f"{e}", encoding="utf-8")
+        except Exception:
+            pass
+    finally:
+        _sys.stderr.flush()
+        _os._exit(code)      # немедленный выход, без ожидания потоков nodriver
+
+
+FETCH_TIMEOUT = 150   # секунд на одну попытку
+
+
+async def fetch_html(
+    url: str,
+    warmup_url: str = "https://www.mobile.de/ru/",
+    blocked_markers: tuple[str, ...] = ("Access denied", "Zugriff verweigert"),
+    attempts: int = 3,
+    timeout: int = FETCH_TIMEOUT,
+) -> str:
+    """
+    Забирает HTML страницы браузером в отдельном процессе.
+    До `attempts` попыток, каждая — свежий браузер: Cloudflare часто
+    пропускает со второго раза. Зависший браузер убивается по таймауту.
+    """
+    import asyncio
+    import multiprocessing
+    import shutil
+    import tempfile
+    import time
+    from pathlib import Path
+
+    ctx = multiprocessing.get_context("spawn")
+    last_err: str = "не удалось загрузить страницу"
+
+    for attempt in range(attempts):
+        tmp = Path(tempfile.mkdtemp(prefix="autokp_scrape_"))
+        out, err = tmp / "page.html", tmp / "error.txt"
+        proc = ctx.Process(
+            target=_browser_worker,
+            args=(url, warmup_url, tuple(blocked_markers), str(out), str(err)),
+            daemon=True,
+        )
+        try:
+            proc.start()
+            deadline = time.monotonic() + timeout
+            while proc.is_alive() and time.monotonic() < deadline:
+                await asyncio.sleep(0.4)
+
+            if proc.is_alive():
+                proc.kill()
+                proc.join(5)
+                last_err = "сайт не ответил вовремя"
+            elif out.exists():
+                return out.read_text(encoding="utf-8")
+            elif err.exists():
+                last_err = err.read_text(encoding="utf-8").strip() or last_err
+            else:
+                last_err = "браузер завершился, не отдав страницу"
+        except Exception as e:
+            last_err = str(e)
+        finally:
+            if proc.is_alive():
+                proc.kill()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        if attempt < attempts - 1:
+            await asyncio.sleep(4)
+
+    raise Exception(last_err)
+
+
+# ── httpx-фолбэк (почти всегда блокируется, оставлен как страховка) ──────────
 
 async def _scrape_with_httpx(url: str) -> dict:
     import httpx
@@ -225,45 +479,23 @@ async def _scrape_with_httpx(url: str) -> dict:
         return _parse_html(resp.text)
 
 
-# ── Public entry point ────────────────────────────────────────────────────────
-
-def _run_nodriver_in_thread(url: str) -> dict:
-    """Run nodriver in a fresh thread with its own ProactorEventLoop (Windows needs this)."""
-    import asyncio as _asyncio
-    loop = _asyncio.new_event_loop()
-    if hasattr(_asyncio, "WindowsProactorEventLoopPolicy"):
-        _asyncio.set_event_loop_policy(_asyncio.WindowsProactorEventLoopPolicy())
-    _asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(_scrape_with_nodriver(url))
-    finally:
-        loop.close()
-
+# ── Публичные точки входа ────────────────────────────────────────────────────
 
 async def scrape_mobile_de(url: str) -> dict:
-    """
-    Run nodriver up to 3 times in isolated threads (each attempt = fresh browser).
-    Cloudflare warms up after the first attempt so subsequent tries usually succeed.
-    httpx is a last-resort fallback (almost always blocked, but kept as safety net).
-    """
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
-
-    loop = asyncio.get_event_loop()
-    last_err: Exception | None = None
-
-    for attempt in range(3):
-        try:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                return await loop.run_in_executor(pool, _run_nodriver_in_thread, url)
-        except Exception as e:
-            last_err = e
-            if attempt < 2:
-                # Brief pause — Cloudflare caches the IP from prior attempt
-                await asyncio.sleep(4)
-
-    # All nodriver attempts exhausted — try plain httpx as last resort
+    """Загружает и разбирает объявление mobile.de (ссылка любой локали)."""
+    url = normalise_mobile_de(url)
     try:
+        html = await fetch_html(url)
+    except Exception:
+        # последняя попытка — обычный httpx
         return await _scrape_with_httpx(url)
-    except Exception as e:
-        raise Exception(f"{e}") from e
+    return _parse_html(html)
+
+
+async def scrape(url: str) -> dict:
+    """Единая точка входа: сам определяет площадку по ссылке."""
+    source = detect_source(url)
+    if source == SOURCE_AUTOSCOUT:
+        from autoscout24 import scrape_autoscout24
+        return await scrape_autoscout24(url)
+    return await scrape_mobile_de(url)

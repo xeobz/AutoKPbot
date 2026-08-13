@@ -1,0 +1,33 @@
+{
+  "command": "ux-audit",
+  "timestamp": "2026-08-13T21:40:00+03:00",
+  "surface": "C:/Code/ПроектСаши/frontend — Telegram Mini App (Montaro AutoKP)",
+  "lint_baseline": { "score": 87, "critical": 1, "high": 8, "medium": 9, "low": 2, "files_scanned": 11, "rules_loaded": 152 },
+  "findings": [
+    { "lens": "FRAME", "severity": "High", "title": "Продукт не носит имя компании", "principle": "Lean UX — поверхность отвечает «чей это продукт»", "evidence": "шапка «🚗 AutoKP», <title>AutoKP</title>, favicon отсутствует", "fix": "вордмарк MONTARO + монограмма, title, favicon" },
+    { "lens": "FRAME", "severity": "Cosmetic", "title": "Нет строки назначения при первом открытии", "principle": "Lean UX — outcome читается сразу", "evidence": "в пустом состоянии видно только поле ссылки", "fix": "подзаголовок «Расчёт и КП по авто из Европы»" },
+    { "lens": "DISCOVER", "severity": "High", "title": "Эмодзи как функциональные иконки", "principle": "Norman — signifiers", "evidence": "linter emoji-in-ui ×4, lone-emoji-as-icon ×2: таббар и строки расчёта", "fix": "инлайн-SVG единой толщины; снять эмодзи с подписей расчёта в вебе" },
+    { "lens": "DISCOVER", "severity": "Medium", "title": "Поддерживаемые площадки видны только после ошибки", "principle": "Norman — gulf of execution", "evidence": "placeholder только mobile.de, про autoscout24 узнаёшь из ошибки", "fix": "подпись под полем с обеими площадками" },
+    { "lens": "SCAN", "severity": "High", "title": "18 строк расчёта одного веса, итог тонет", "principle": "Krug — squint test", "evidence": "card_rows отдаёт 18 строк, ИТОГО последним", "fix": "4 ключевые строки + сворачиваемое «Подробно», итог доминантой" },
+    { "lens": "SCAN", "severity": "Medium", "title": "Группы разделены пустыми строками таблицы", "principle": "Krug — noise reduction", "evidence": "_SEP рендерится пустым <tr>", "fix": "групповые подписи и hairline" },
+    { "lens": "SCAN", "severity": "Medium", "title": "Квадратные превью обрезают кузов", "principle": "Krug — самоочевидность", "evidence": "styles.css:268 aspect-ratio 1/1 при снимках 4:3", "fix": "сетка 4/3" },
+    { "lens": "ACT", "severity": "Medium", "title": "13 вариантов выкупа в одном экране", "principle": "закон Хика", "evidence": "11 процентов + минималка + своя сумма подряд", "fix": "компактные чипы по 3 в ряд" },
+    { "lens": "ACT", "severity": "Medium", "title": "Нет состояния нажатия", "principle": "Norman — обратная связь <100мс", "evidence": "у .btn/.choice/.photo нет :active и transition", "fix": "press-состояние 120мс с учётом reduced-motion" },
+    { "lens": "ACT", "severity": "Cosmetic", "title": "Жёсткая сетка галереи repeat(3, 1fr)", "principle": "закон Фиттса", "evidence": "linter grid-cols-3-1fr-default", "fix": "auto-fill minmax" },
+    { "lens": "READ", "severity": "Medium", "title": "Плейсхолдер учит неверному формату контрагента", "principle": "copy — подсказка показывает результат", "evidence": "«Например: Иван(Саша)», сервер сам дописывает менеджера", "fix": "«Иван» + пояснение" },
+    { "lens": "READ", "severity": "Medium", "title": "Шаг называется «Поля»", "principle": "copy — ярлык называет содержимое", "evidence": "заголовок шага 7", "fix": "«Таможня и расходы»" },
+    { "lens": "READ", "severity": "Medium", "title": "Кнопка сохранения настройки «ОК»", "principle": "copy — CTA = глагол + результат", "evidence": "14 кнопок «ОК» подряд", "fix": "«Сохранить», активна при изменении" },
+    { "lens": "READ", "severity": "Cosmetic", "title": "Номер лота «#000» в предпросмотре", "principle": "copy — не выдавать выдуманное за настоящее", "evidence": "предпросмотр печатает #000", "fix": "«#— номер присвоится при записи»" },
+    { "lens": "RECOVER", "severity": "Critical", "title": "Снят outline у полей без замены", "principle": "WCAG 2.4.7 focus visible", "evidence": "styles.css:178 outline:none, замена — 1px смена цвета рамки", "fix": ":focus-visible кольцо 2px на всех интерактивных элементах" },
+    { "lens": "RECOVER", "severity": "High", "title": "Необратимое действие без подтверждения", "principle": "Norman — предотвращение ошибки", "evidence": "«Записать и отправить КП» пишет в боевую таблицу и шлёт КП клиенту", "fix": "шаг подтверждения с суммой, направлением и числом фото" },
+    { "lens": "RECOVER", "severity": "Medium", "title": "100vh без dvh", "principle": "мобильный вьюпорт с динамическими панелями", "evidence": "styles.css:63", "fix": "min-height: 100dvh с фолбэком" },
+    { "lens": "RECOVER", "severity": "Medium", "title": "reduced-motion лишь замедляет анимацию", "principle": "WCAG 2.3.3", "evidence": "styles.css:236 — 1.5s → 3s", "fix": "статичный индикатор при reduce" }
+  ],
+  "severity_counts": { "critical": 1, "high": 5, "medium": 10, "cosmetic": 3 },
+  "dominant_lens": "RECOVER",
+  "strategic_moves": [
+    "Собрать айдентику Montaro: вордмарк, монограмма, favicon, акцент",
+    "Переписать блок расчёта: 4 строки + «Подробно» + доминирующий итог",
+    "Закрыть контур ошибок: focus-visible, подтверждение отправки, reduced-motion"
+  ]
+}

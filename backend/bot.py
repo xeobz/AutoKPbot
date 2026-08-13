@@ -10,6 +10,8 @@ import json
 import os
 import re
 import sys
+import uuid
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 if sys.platform == "win32":
@@ -23,8 +25,10 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaPhoto,
+    MenuButtonWebApp,
     ReplyKeyboardMarkup,
     Update,
+    WebAppInfo,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -36,23 +40,46 @@ from telegram.ext import (
     filters,
 )
 
-from ai import generate_kp_text
-from scraper import scrape_mobile_de
+from calc import (
+    DIRECTION_LABELS,
+    apply_buyback,
+    buyback_label,
+    buyback_options,
+    card_rows,
+    default_logistics,
+    fmt_eur,
+    fmt_rub,
+    netto,
+    total_rub,
+)
+from kpsend import CONTACT, send_kp
+from scraper import find_listing_url, scrape
 from storage import (
+    EDITABLE_SETTINGS as _EDITABLE,
+    close_draft,
     complete_pending,
-    get_all_settings,
     get_admin_ids,
+    get_draft,
+    save_draft,
     add_admin,
     remove_admin,
     get_all_admins,
+    get_all_brand_emoji,
+    get_brand_emoji,
+    get_float,
     get_history_by_id,
     get_history_for_user,
     get_pending_by_id,
     get_pending_for_user,
+    get_rates,
     get_setting,
+    get_tariffs,
     init_db,
+    remove_brand_emoji,
     save_history,
     save_pending,
+    set_brand_emoji,
+    set_rates,
     set_setting,
     update_history_data,
 )
@@ -98,9 +125,16 @@ CONTACT  = "@Aleksandr_Montaro"
     ASK_DIRECTION,       # 19 — choose sheet (minsk / kult40 / msk)
     ASK_EVACUATOR,       # 20 — Эвакуатор СПБ-МСК (Культ40 only)
     ASK_CUSTOMS_TKS,     # 21 — Таможня ТКС (Культ40 + МСК)
-) = range(22)
+    ASK_BUYBACK_MANUAL,  # 22 — выкуп: ввод суммы вручную
+    RATES_AWAIT_EUR,     # 23 — курс дня: EUR→USDT
+    RATES_AWAIT_RUB,     # 24 — курс дня: USDT→₽
+    BRAND_AWAIT_NAME,    # 25 — эмодзи марок: название марки
+    BRAND_AWAIT_EMOJI,   # 26 — эмодзи марок: сам премиум-эмодзи
+    PHOTO_CHOICE,        # 27 — выбрать фото в мини-аппе или автоподбором
+) = range(28)
 
-MOBILE_DE_RE = re.compile(r"https?://(?:www\.)?mobile\.de\S+", re.IGNORECASE)
+# Адрес мини-аппа (https). Пусто — бот работает по-старому, без веба.
+WEB_APP_URL = os.getenv("WEB_APP_URL", "").rstrip("/")
 
 VAT_OPTIONS = [
     ("🇩🇪 19% (Германия)", "1.19"),
@@ -108,6 +142,10 @@ VAT_OPTIONS = [
     ("🇧🇪 21% (Бельгия)",  "1.21"),
 ]
 BUYBACK_PCTS = list(range(5, 16))   # 5–15 %
+
+# Часовой пояс для утреннего опроса курсов — сервер живёт в UTC
+MSK = timezone(timedelta(hours=3))
+RATES_ASK_TIME = time(hour=8, minute=0, tzinfo=MSK)
 
 # Keyboard button labels (used for routing)
 _BTN_HISTORY  = "📋 История"
@@ -118,7 +156,7 @@ _BTN_SETTINGS = "⚙️ Настройки"
 _KB_FILTER = filters.Regex(
     rf"^({re.escape(_BTN_HISTORY)}|{re.escape(_BTN_PENDING)}|{re.escape(_BTN_SETTINGS)})$"
 )
-_mobile_de_filter = filters.TEXT & ~filters.COMMAND & filters.Regex(r"mobile\.de")
+_link_filter = filters.TEXT & ~filters.COMMAND & filters.Regex(r"mobile\.de|autoscout24\.")
 
 
 # ── Keyboard helpers ──────────────────────────────────────────────────────────
@@ -130,16 +168,13 @@ def _main_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [row],
         resize_keyboard=True,
-        input_field_placeholder="Вставьте ссылку mobile.de…",
+        input_field_placeholder="Вставьте ссылку mobile.de или autoscout24…",
     )
 
 
-def fmt_eur(v: float) -> str:
-    return f"{v:,.0f} €".replace(",", " ")
-
-
-def fmt_rub(v: float) -> str:
-    return f"{v:,.0f} ₽".replace(",", " ")
+def _today() -> str:
+    """Сегодняшняя дата по Москве — сервер живёт в UTC."""
+    return datetime.now(MSK).strftime("%d.%m.%Y")
 
 
 # ── Number parser (handles non-breaking spaces from mobile keyboards) ─────────
@@ -154,166 +189,67 @@ def _parse_number(text: str) -> float | None:
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
 
-def _extract_url(text: str) -> str | None:
-    m = MOBILE_DE_RE.search(text)
-    return m.group(0) if m else None
-
-
-def _get_rates() -> dict:
-    """Rates for ЕС/Минск (sheet 1)."""
-    s = get_all_settings()
+def _rates_for_calc() -> dict:
+    """Курс дня — единый для всех направлений."""
+    r = get_rates()
     return {
-        "rate_n":  float(s.get("rate_n",  1.1621)),
-        "rate_p":  float(s.get("rate_p",  79.7)),
-        "r_value": float(s.get("r_value", 45000)),
+        "rate_eur_usdt": r["rate_eur_usdt"],
+        "rate_usdt_rub": r["rate_usdt_rub"],
     }
-
-
-def _get_rates_v2() -> dict:
-    """Rates for ЕС/Культ40 and ЕС-МСК (sheets 2 & 3)."""
-    s = get_all_settings()
-    return {
-        "rate_eur_usd": float(s.get("rate_eur_usd", 1.10)),
-        "rate_usd_rub": float(s.get("rate_usd_rub", 80.0)),
-    }
-
-
-def _calc(d: dict) -> dict:
-    """Compute all derived values for ЕС/Минск (sheet 1)."""
-    g   = d.get("price_eur", 0) or 0
-    vat = d.get("vat", 1.19)
-    h   = g / vat
-    k   = d.get("buyback_val", 0) or 0
-    j   = 5300
-    l_  = h * 0.013 + 100
-    m   = h + j + k + l_ + 350
-    n   = d.get("rate_n", 1.1621)
-    p   = d.get("rate_p", 79.7)
-    o   = m * n
-    q   = o * p
-    r   = d.get("r_value", 45000) or 45000
-    s   = d.get("customs_eur", 0) or 0
-    t   = s * n * p
-    u   = d.get("util_rub", 0) or 0
-    v   = q + r + t + u
-    return dict(g=g, vat=vat, h=h, k=k, j=j, l=l_, m=m, n=n, p=p, o=o, q=q, r=r, s=s, t=t, u=u, v=v)
-
-
-def _calc_v2(d: dict) -> dict:
-    """Compute all derived values for ЕС/Культ40 and ЕС-МСК (sheets 2 & 3)."""
-    direction = d.get("direction", "kult40")
-    f   = d.get("price_eur", 0) or 0          # F — БРУТТО
-    vat = d.get("vat", 1.19)
-    g   = f / vat                              # G — НЕТТО
-    j   = float(d.get("logistics",            # I — Логистика
-                       4100 if direction == "kult40" else 2500))
-    k   = d.get("buyback_val", g * 0.08)      # J — Выкуп
-    l_  = g * 0.013 + 100                     # K — Инвойс
-    l_t = g + j + k + l_ + 350               # L — Итого EUR
-    m   = d.get("rate_eur_usd", 1.10)         # M — КК EUR/USD
-    n   = l_t * m                             # N — USDT
-    o   = d.get("rate_usd_rub", 80.0)         # O — USD/RUB
-    p   = n * o                               # P — RUB
-    q   = 100_000.0                           # Q — Брокер (fixed)
-    r   = d.get("evacuator_rub", 0) or 0      # R — Эвакуатор (Культ40)
-    s   = d.get("customs_tks_rub", 0) or 0    # S (Культ40) / R (МСК) — Таможня ТКС
-    t   = 5_200.0                             # T (Культ40) / S (МСК) — Утиль (fixed)
-    v   = p + q + r + s + t if direction == "kult40" else p + q + s + t
-    return dict(f=f, vat=vat, g=g, j=j, k=k, l=l_, l_t=l_t,
-                m=m, n=n, o=o, p=p, q=q, r=r, s=s, t=t, v=v)
 
 
 def _build_card(d: dict, title: str = "📋 <b>Итоговая карточка</b>") -> str:
-    """Dispatch to the correct card builder based on direction."""
-    if d.get("direction") in ("kult40", "msk"):
-        return _build_card_v2(d, title)
-    return _build_card_minsk(d, title)
-
-
-def _build_card_minsk(d: dict, title: str = "📋 <b>Итоговая карточка</b>") -> str:
-    c   = _calc(d)
-    pct = d.get("buyback_pct", "—")
-    lines = [
-        title, "",
+    """Карточка расчёта. Строки считает calc.py — те же, что видит веб."""
+    head = [title, ""] if title else []
+    head += [
         f"🚗 <b>{d.get('car_name', '—')}</b>",
-        f"📍 Направление: 🏙 ЕС/Минск",
+        f"📍 Направление: {DIRECTION_LABELS.get(d.get('direction', 'minsk'), '—')}",
         f"👤 Контрагент: {d.get('counterparty', '—')}",
         f"🔗 <a href=\"{d.get('url','')}\">Объявление</a>",
         "",
-        f"💶 БРУТТО (G): <b>{fmt_eur(c['g'])}</b>",
-        f"📊 НДС: {c['vat']}  →  НЕТТО: <b>{fmt_eur(c['h'])}</b>",
-        f"🏦 Выкуп {pct}% (K): {fmt_eur(c['k'])}",
-        f"📦 Логистика (J): {fmt_eur(c['j'])}",
-        f"📄 Инвойс (L): {fmt_eur(c['l'])}",
-        f"💰 Итого EUR (M): <b>{fmt_eur(c['m'])}</b>",
-        "",
-        f"📈 EUR→USDT (N): {c['n']}",
-        f"💵 USDT (O): {fmt_eur(c['o'])}",
-        f"📈 USDT→₽ (P): {c['p']}",
-        f"💵 Итого ₽ (Q): <b>{fmt_rub(c['q'])}</b>",
-        "",
-        f"🛃 Таможня EUR (S): {fmt_eur(c['s']) if c['s'] else '⏳ не указана'}",
-        f"🛃 Таможня ₽ (T): {fmt_rub(c['t']) if c['s'] else '⏳'}",
-        f"♻️ Утиль (U): {fmt_rub(c['u']) if c['u'] else '⏳ не указан'}",
-        "",
-        f"✅ <b>Итого с утильсбором (V): {fmt_rub(c['v'])}</b>",
     ]
-    return "\n".join(lines)
-
-
-def _build_card_v2(d: dict, title: str = "📋 <b>Итоговая карточка</b>") -> str:
-    c         = _calc_v2(d)
-    direction = d.get("direction", "kult40")
-    pct       = d.get("buyback_pct", "—")
-    dir_label = "🏭 ЕС/Культ40" if direction == "kult40" else "🌆 ЕС-МСК"
-    lines = [
-        title, "",
-        f"🚗 <b>{d.get('car_name', '—')}</b>",
-        f"📍 Направление: {dir_label}",
-        f"👤 Контрагент: {d.get('counterparty', '—')}",
-        f"🔗 <a href=\"{d.get('url','')}\">Объявление</a>",
-        "",
-        f"💶 БРУТТО (F): <b>{fmt_eur(c['f'])}</b>",
-        f"📊 НДС: {c['vat']}  →  НЕТТО: <b>{fmt_eur(c['g'])}</b>",
-        f"🏦 Выкуп {pct}% (J): {fmt_eur(c['k'])}",
-        f"📦 Логистика (I): {fmt_eur(c['j'])}",
-        f"📄 Инвойс (K): {fmt_eur(c['l'])}",
-        f"💰 Итого EUR (L): <b>{fmt_eur(c['l_t'])}</b>",
-        "",
-        f"📈 КК EUR/USD (M): {c['m']}",
-        f"💵 USDT (N): {fmt_eur(c['n'])}",
-        f"📈 USD→₽ ЦБ (O): {c['o']}",
-        f"💵 Итого ₽ (P): <b>{fmt_rub(c['p'])}</b>",
-        "",
-        f"🏢 Брокер ПТО+ЭПС (Q): {fmt_rub(c['q'])}",
+    body = [
+        f"{r['label']}: <b>{r['value']}</b>" if r["label"] else ""
+        for r in card_rows(d)
     ]
-    if direction == "kult40":
-        lines += [
-            f"🚛 Эвакуатор СПБ-МСК (R): {fmt_rub(c['r']) if c['r'] else '⏳ не указан'}",
-            f"🛃 Таможня ТКС (S): {fmt_rub(c['s']) if c['s'] else '⏳ не указана'}",
-            f"♻️ Утиль (T): {fmt_rub(c['t'])}",
-            "",
-            f"✅ <b>Итого (U): {fmt_rub(c['v'])}</b>",
-        ]
-    else:
-        lines += [
-            f"🛃 Таможня ТКС (R): {fmt_rub(c['s']) if c['s'] else '⏳ не указана'}",
-            f"♻️ Утиль (S): {fmt_rub(c['t'])}",
-            "",
-            f"✅ <b>Итого (T): {fmt_rub(c['v'])}</b>",
-        ]
-    return "\n".join(lines)
+    text = "\n".join(head + body)
+
+    rates = get_rates()
+    if not rates["rates_date"]:
+        text += "\n\n⚠️ Курс дня ещё не задавался — считаю по сохранённому"
+    elif rates["rates_date"] != _today():
+        text += f"\n\n⚠️ Курс от {rates['rates_date']} — на сегодня не обновлён"
+    return text
 
 
 def _build_buyback_keyboard(h: float) -> InlineKeyboardMarkup:
+    """
+    Проценты выкупа. Все варианты ниже минималки схлопываются в одну кнопку,
+    плюс кнопка ручного ввода суммы.
+    """
+    min_eur = get_float("buyback_min_eur", 2500)
+    options = buyback_options(h)
+
     buttons, row = [], []
-    for pct in BUYBACK_PCTS:
-        k = h * pct / 100
-        row.append(InlineKeyboardButton(f"{pct}% — {fmt_eur(k)}", callback_data=f"buyback:{pct}"))
+    for opt in options:
+        if opt["below_min"]:
+            continue                      # уходит в общую кнопку минималки
+        row.append(InlineKeyboardButton(
+            f"{opt['pct']}% — {fmt_eur(opt['eur'])}", callback_data=f"buyback:{opt['pct']}"
+        ))
         if len(row) == 2:
             buttons.append(row); row = []
     if row:
         buttons.append(row)
+
+    # Кнопка минималки нужна, только если какие-то проценты в неё не проходят
+    if any(o["below_min"] for o in options):
+        buttons.insert(0, [InlineKeyboardButton(
+            f"{fmt_eur(min_eur)} — минималка", callback_data="buyback:min"
+        )])
+    buttons.append([InlineKeyboardButton(
+        "✏️ Ввести сумму", callback_data="buyback:manual"
+    )])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -349,92 +285,106 @@ def _history_edit_kb(direction: str = "minsk") -> InlineKeyboardMarkup:
 # ── KP generation + sending ───────────────────────────────────────────────────
 
 async def _send_kp(chat_id: int, car_num: int, d: dict, bot) -> dict | None:
+    """Отправка КП. Логика общая с веб-API — лежит в kpsend.py."""
+    return await send_kp(bot, chat_id, car_num, d)
+
+
+# ── Выбор фото: мини-апп или автоподбор ──────────────────────────────────────
+
+def _photo_choice_kb(draft_id: str) -> InlineKeyboardMarkup:
+    rows = []
+    if WEB_APP_URL:
+        rows.append([InlineKeyboardButton(
+            "🖼 Выбрать фото",
+            web_app=WebAppInfo(url=f"{WEB_APP_URL}/?draft={draft_id}"),
+        )])
+    rows.append([InlineKeyboardButton(
+        "⚡ Отправить с автоподбором", callback_data=f"autokp:{draft_id}"
+    )])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _offer_photo_choice(chat_id: int, user_id: int, car_num: int, d: dict, ctx) -> int:
     """
-    Generate and send КП (AI text + photos).
-    Returns a dict with photo message IDs for later edit_message_media swaps,
-    or None if no photos were sent.
+    После записи в таблицу предлагаем выбрать фото:
+    кнопка открывает мини-апп на нужном черновике, либо автоподбор прямо тут.
+    Если адрес мини-аппа не задан — сразу шлём КП автоподбором.
     """
-    from storage import get_setting
+    data = dict(d)
+    data["car_num"] = car_num
 
-    c = _calc(d)
-    try:
-        kp_text = await generate_kp_text(
-            make=d.get("make", ""),
-            model=d.get("model", ""),
-            year=d.get("year", ""),
-            mileage=d.get("mileage"),
-            color=d.get("color", ""),
-            features=d.get("features", []),
-            price_eur=c["g"],
-            customs_eur=c["g"] + c["s"],
-            price_rub_turnkey=c["q"] + c["t"],
-            price_rub_util=c["u"],
-            price_rub_epts=c["r"],
-            contact=CONTACT,
-            lot_number=str(car_num),
-        )
-    except Exception:
-        kp_text = None
-
-    # Cluster algorithm already returns only gallery photos — just take first N
-    all_photos = d.get("photos", [])
-    try:
-        count = int(get_setting("img_count"))
-    except (ValueError, TypeError):
-        count = 6
-    photos = all_photos[:count]
-
-    photo_msg_ids: list[int] = []
-
-    # Telegram caption limit is 1024 chars — KP text goes on the first photo
-    CAPTION_LIMIT = 1024
-    caption: str | None = None
-    if kp_text:
-        if len(kp_text) <= CAPTION_LIMIT:
-            caption = kp_text
-        else:
-            # Truncate at last newline before limit so HTML tags don't break mid-tag
-            cut = kp_text.rfind("\n", 0, CAPTION_LIMIT - 1)
-            caption = kp_text[: cut if cut > 0 else CAPTION_LIMIT - 1] + "…"
-
-    if not photos:
-        if kp_text:
-            await bot.send_message(chat_id=chat_id, text=kp_text, parse_mode="HTML")
-        return None
-
-    if len(photos) == 1:
-        msg = await bot.send_photo(
-            chat_id=chat_id,
-            photo=photos[0],
-            caption=caption,
-            parse_mode="HTML" if caption else None,
-        )
-        photo_msg_ids = [msg.message_id]
-    else:
-        media: list[InputMediaPhoto] = [InputMediaPhoto(media=url) for url in photos]
-        if caption:
-            media[0] = InputMediaPhoto(media=photos[0], caption=caption, parse_mode="HTML")
-        try:
-            msgs = await bot.send_media_group(chat_id=chat_id, media=media)
-            photo_msg_ids = [m.message_id for m in msgs]
-        except Exception:
-            msg = await bot.send_photo(
+    if not WEB_APP_URL:
+        kp = await _send_kp(chat_id, car_num, data, ctx.bot)
+        if kp:
+            ctx.user_data["_kp_edit"] = kp
+            await ctx.bot.send_message(
                 chat_id=chat_id,
-                photo=photos[0],
-                caption=caption,
-                parse_mode="HTML" if caption else None,
+                text="Если нужно заменить фото в КП:",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✏️ Изменить фото", callback_data="kpedit:start"),
+                    InlineKeyboardButton("✅ Готово",         callback_data="kpedit:done"),
+                ]]),
             )
-            photo_msg_ids = [msg.message_id]
+            return KP_PHOTO_EDIT
+        return WAIT_URL
 
-    return {
-        "chat_id":       chat_id,
-        "photo_msg_ids": photo_msg_ids,
-        "used_photos":   list(photos),    # currently shown (mutable, updated on swap)
-        "shown_photos":  set(photos),     # ALL ever shown — excluded from pool forever
-        "all_photos":    all_photos,      # full gallery
-        "caption":       caption,         # preserved when photo #0 is swapped out
-        "caption_idx":   0,               # index of the photo that carries the caption
-    }
+    draft_id = uuid.uuid4().hex[:12]
+    save_draft(draft_id, user_id, chat_id, data)
+    await ctx.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "🖼 <b>Фото для КП</b>\n\n"
+            "Откройте приложение и отметьте нужные кадры — "
+            "или отправлю подборку сам."
+        ),
+        parse_mode="HTML",
+        reply_markup=_photo_choice_kb(draft_id),
+    )
+    return PHOTO_CHOICE
+
+
+async def photo_choice_auto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Кнопка «Отправить с автоподбором» — КП уходит без захода в мини-апп."""
+    query = update.callback_query
+    await query.answer()
+    draft_id = query.data.split(":")[1]
+
+    rec = get_draft(draft_id)
+    if not rec:
+        await query.edit_message_text("❌ Черновик не найден — начните расчёт заново.")
+        return WAIT_URL
+
+    d = rec["data"]
+    await query.edit_message_text("⏳ Генерирую КП…")
+    kp = await _send_kp(rec["chat_id"], d.get("car_num", "000"), d, ctx.bot)
+    close_draft(draft_id)
+
+    if kp:
+        ctx.user_data["_kp_edit"] = kp
+        await ctx.bot.send_message(
+            chat_id=rec["chat_id"],
+            text="Если нужно заменить фото в КП:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✏️ Изменить фото", callback_data="kpedit:start"),
+                InlineKeyboardButton("✅ Готово",         callback_data="kpedit:done"),
+            ]]),
+        )
+        return KP_PHOTO_EDIT
+    return WAIT_URL
+
+
+async def cmd_app(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """/app — открыть мини-апп."""
+    if not WEB_APP_URL:
+        await update.message.reply_text("Мини-апп пока не подключён.")
+        return WAIT_URL
+    await update.message.reply_text(
+        "🚀 Открыть приложение:",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("Открыть", web_app=WebAppInfo(url=f"{WEB_APP_URL}/"))
+        ]]),
+    )
+    return WAIT_URL
 
 
 # ── /start ────────────────────────────────────────────────────────────────────
@@ -443,10 +393,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     user     = update.effective_user
     is_admin = user.id in ADMIN_IDS
     await update.message.reply_text(
-        "👋 Привет! Отправь ссылку с <b>mobile.de</b> — начнём расчёт.\n\n"
+        "👋 Привет! Отправь ссылку с <b>mobile.de</b> или <b>autoscout24</b> — начнём расчёт.\n\n"
         "Команды:\n"
+        "/app — открыть приложение\n"
         "/pending — незавершённые запросы\n"
-        "/settings — настройки курсов (для администратора)",
+        "/rates — курс дня (для администратора)\n"
+        "/settings — курсы, тарифы, фото (для администратора)",
         parse_mode="HTML",
         reply_markup=_main_kb(is_admin),
     )
@@ -456,19 +408,21 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 # ── Step 1: receive URL ───────────────────────────────────────────────────────
 
 async def receive_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    url = _extract_url(update.message.text or "")
-    if not url:
+    found = find_listing_url(update.message.text or "")
+    if not found:
         await update.message.reply_text(
-            "❌ Не нашёл ссылку mobile.de. Отправь полную ссылку.",
+            "❌ Не нашёл ссылку. Пришли ссылку с <b>mobile.de</b> или <b>autoscout24</b>.",
+            parse_mode="HTML",
             reply_markup=_main_kb(update.effective_user.id in ADMIN_IDS),
         )
         return WAIT_URL
+    url, source = found
 
     # ── Photo debug mode (🖼 Отладка фото in settings) ───────────────────────
     if ctx.user_data.pop("_img_debug_mode", False):
         wait_msg = await update.message.reply_text("⏳ Загружаю объявление…")
         try:
-            result = await scrape_mobile_de(url)
+            result = await scrape(url)
         except Exception as e:
             await wait_msg.edit_text(f"❌ Ошибка загрузки:\n<code>{e}</code>", parse_mode="HTML")
             return WAIT_URL
@@ -516,6 +470,7 @@ async def receive_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     ctx.user_data.clear()
     ctx.user_data["url"] = url
+    ctx.user_data["source"] = source
 
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("🏙 ЕС/Минск",  callback_data="dir:minsk"),
@@ -538,23 +493,20 @@ async def receive_direction(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     direction = query.data.split(":")[1]   # "minsk" / "kult40" / "msk"
     ctx.user_data["direction"] = direction
 
-    # Load rates + logistics for the chosen sheet
-    if direction == "minsk":
-        ctx.user_data.update(_get_rates())
-    else:
-        ctx.user_data.update(_get_rates_v2())
-        s = get_all_settings()
-        ctx.user_data["logistics"] = float(
-            s.get("logistics_kult40" if direction == "kult40" else "logistics_msk",
-                  4100 if direction == "kult40" else 2500)
-        )
+    # Курс дня один на все направления, логистика — своя для каждого листа
+    tf = get_tariffs()
+    ctx.user_data.update(_rates_for_calc())
+    ctx.user_data["logistics"] = default_logistics(direction, tf)
+    ctx.user_data["epts_rub"]  = tf["epts_rub"]
+    # Снимок тарифов: чтобы запись в истории не пересчиталась после их правки
+    ctx.user_data["tariffs"]   = tf
 
     url = ctx.user_data.get("url", "")
     ctx.user_data["_scraping"] = True
     await query.edit_message_text("⏳ Загружаю объявление…")
 
     try:
-        scraped = await scrape_mobile_de(url)
+        scraped = await scrape(url)
     except Exception as e:
         ctx.user_data.pop("_scraping", None)
         await query.edit_message_text(f"❌ Ошибка загрузки: {e}\n\nПопробуй ещё раз.")
@@ -566,10 +518,12 @@ async def receive_direction(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     model    = scraped.get("model", "")
     year     = scraped.get("year", "")
     price    = scraped.get("price_eur") or 0.0
-    car_name = f"{make} {model} {year}".strip()
+    title    = scraped.get("title") or f"{make} {model}".strip()
+    car_name = title or f"{make} {model} {year}".strip()
 
     ctx.user_data.update({
         "car_name":  car_name,
+        "title":     title,
         "price_eur": price,
         "make":      make,
         "model":     model,
@@ -579,6 +533,10 @@ async def receive_direction(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         "features":  scraped.get("features", []),
         "photos":    scraped.get("photos", []),
         "all_photos": scraped.get("all_photos", []),
+        "power_hp":  scraped.get("power_hp"),
+        "engine_l":  scraped.get("engine_l"),
+        "fuel":      scraped.get("fuel", ""),
+        "gearbox":   scraped.get("gearbox", ""),
     })
 
     dir_label = {"minsk": "🏙 ЕС/Минск", "kult40": "🏭 ЕС/Культ40", "msk": "🌆 ЕС-МСК"}.get(direction, direction)
@@ -637,48 +595,84 @@ async def receive_vat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 # ── Step 4: buyback % ─────────────────────────────────────────────────────────
 
-async def receive_buyback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    pct = int(query.data.split(":")[1])
-
-    g   = ctx.user_data["price_eur"]
-    vat = ctx.user_data["vat"]
-    h   = g / vat
-    k   = h * pct / 100
-
-    ctx.user_data["buyback_pct"] = pct
-    ctx.user_data["buyback_val"] = round(k, 2)
-
+async def _after_buyback(update_or_query, ctx: ContextTypes.DEFAULT_TYPE, label: str, k: float) -> int:
+    """Следующий шаг после выбора выкупа — свой для каждого направления."""
     direction = ctx.user_data.get("direction", "minsk")
+    is_query  = hasattr(update_or_query, "edit_message_text")
+
+    async def reply(text: str, **kw):
+        if is_query:
+            return await update_or_query.edit_message_text(text, **kw)
+        return await update_or_query.message.reply_text(text, **kw)
 
     if direction == "kult40":
-        await query.edit_message_text(
-            f"✅ Выкуп <b>{pct}%</b> → <b>{fmt_eur(k)}</b>\n\n"
+        await reply(
+            f"✅ Выкуп <b>{label}</b> → <b>{fmt_eur(k)}</b>\n\n"
             f"Введите <b>стоимость эвакуатора СПБ-МСК</b> (руб.):",
             parse_mode="HTML",
         )
         return ASK_EVACUATOR
 
     if direction == "msk":
-        await query.edit_message_text(
-            f"✅ Выкуп <b>{pct}%</b> → <b>{fmt_eur(k)}</b>\n\n"
+        await reply(
+            f"✅ Выкуп <b>{label}</b> → <b>{fmt_eur(k)}</b>\n\n"
             f"Введите <b>таможню ТКС</b> (руб.):",
             parse_mode="HTML",
         )
         return ASK_CUSTOMS_TKS
 
-    # minsk — original flow
+    # minsk — исходный флоу
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("⏸ Отложить — введу позже", callback_data="customs:defer")
     ]])
-    await query.edit_message_text(
-        f"✅ Выкуп <b>{pct}%</b> → K = <b>{fmt_eur(k)}</b>\n\n"
+    await reply(
+        f"✅ Выкуп <b>{label}</b> → K = <b>{fmt_eur(k)}</b>\n\n"
         f"Введите <b>таможню РБ</b> в EUR\n(или нажмите «Отложить»):",
         reply_markup=kb,
         parse_mode="HTML",
     )
     return ASK_CUSTOMS
+
+
+async def receive_buyback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    choice = query.data.split(":")[1]
+
+    g   = ctx.user_data["price_eur"]
+    vat = ctx.user_data["vat"]
+    h   = g / vat
+
+    # ── Ввод суммы вручную ────────────────────────────────────────────────────
+    if choice == "manual":
+        await query.edit_message_text(
+            f"НЕТТО: <b>{fmt_eur(h)}</b>\n\n"
+            f"Введите <b>сумму выкупа</b> в EUR (например: 3200):",
+            parse_mode="HTML",
+        )
+        return ASK_BUYBACK_MANUAL
+
+    # ── Минималка ─────────────────────────────────────────────────────────────
+    if choice == "min":
+        k = get_float("buyback_min_eur", 2500)
+        apply_buyback(ctx.user_data, "fixed", k)
+        return await _after_buyback(query, ctx, "минималка", k)
+
+    # ── Процент ───────────────────────────────────────────────────────────────
+    pct = int(choice)
+    apply_buyback(ctx.user_data, "pct", pct)
+    return await _after_buyback(query, ctx, f"{pct}%", ctx.user_data["buyback_val"])
+
+
+async def receive_buyback_manual(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """ASK_BUYBACK_MANUAL — сумма выкупа, введённая руками."""
+    val = _parse_number((update.message.text or "").strip())
+    if val is None or val <= 0:
+        await update.message.reply_text("Введите сумму в EUR, например: 3200")
+        return ASK_BUYBACK_MANUAL
+
+    apply_buyback(ctx.user_data, "fixed", val)
+    return await _after_buyback(update, ctx, "вручную", val)
 
 
 # ── Steps for ЕС/Культ40 and ЕС-МСК ─────────────────────────────────────────
@@ -822,8 +816,7 @@ async def receive_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     await query.edit_message_text(
         f"✅ <b>Записано #{car_num}</b>\n"
         f"🚗 {d.get('car_name')}\n"
-        f"👤 {d.get('counterparty')}\n\n"
-        f"⏳ Генерирую КП…",
+        f"👤 {d.get('counterparty')}",
         parse_mode="HTML",
     )
 
@@ -831,19 +824,7 @@ async def receive_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     data_snapshot = dict(d)
     ctx.user_data.clear()
 
-    kp_result = await _send_kp(chat_id, car_num, data_snapshot, ctx.bot)
-    if kp_result:
-        ctx.user_data["_kp_edit"] = kp_result
-        await ctx.bot.send_message(
-            chat_id=chat_id,
-            text="Если нужно заменить фото в КП:",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✏️ Изменить фото", callback_data="kpedit:start"),
-                InlineKeyboardButton("✅ Готово",         callback_data="kpedit:done"),
-            ]]),
-        )
-        return KP_PHOTO_EDIT
-    return WAIT_URL
+    return await _offer_photo_choice(chat_id, user.id, car_num, data_snapshot, ctx)
 
 
 # ── History ───────────────────────────────────────────────────────────────────
@@ -958,7 +939,7 @@ async def history_edit_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         "util_rub":        "утиль в рублях (например: 1 850 000)",
         "evacuator_rub":   "эвакуатор СПБ-МСК в рублях (например: 40000)",
         "customs_tks_rub": "таможню ТКС в рублях (например: 500000)",
-        "buyback_pct":     "процент выкупа от 1 до 30 (например: 10)",
+        "buyback_pct":     "процент выкупа (1–30) или сумму в EUR (от 100)",
         "counterparty":    "имя контрагента",
     }
     ctx.user_data["_hist_edit_field"] = action
@@ -1002,15 +983,16 @@ async def history_edit_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
 
     elif field == "buyback_pct":
         val = _parse_number(text)
-        if val is None or not (1 <= val <= 30):
-            await update.message.reply_text("Введите процент от 1 до 30:")
+        if val is None or val <= 0:
+            await update.message.reply_text("Введите процент (1–30) или сумму в EUR (от 100):")
             return HISTORY_EDIT_VALUE
-        pct = int(val)
-        g   = data.get("price_eur", 0)
-        vat = data.get("vat", 1.19)
-        h   = g / vat
-        data["buyback_pct"] = pct
-        data["buyback_val"] = round(h * pct / 100, 2)
+        if val <= 30:                     # процент
+            apply_buyback(data, "pct", int(val))
+        elif val >= 100:                  # фиксированная сумма в EUR
+            apply_buyback(data, "fixed", val)
+        else:
+            await update.message.reply_text("Введите процент (1–30) или сумму в EUR (от 100):")
+            return HISTORY_EDIT_VALUE
 
     elif field == "counterparty":
         data["counterparty"] = text
@@ -1141,7 +1123,7 @@ async def pending_util(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     )
 
     await update.message.reply_text(
-        f"✅ <b>Записано #{car_num}</b>\n🚗 {d.get('car_name')}\n\n⏳ Генерирую КП…",
+        f"✅ <b>Записано #{car_num}</b>\n🚗 {d.get('car_name')}",
         parse_mode="HTML",
     )
 
@@ -1149,19 +1131,7 @@ async def pending_util(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     data_snapshot = dict(d)
     ctx.user_data.clear()
 
-    kp_result = await _send_kp(chat_id, car_num, data_snapshot, ctx.bot)
-    if kp_result:
-        ctx.user_data["_kp_edit"] = kp_result
-        await ctx.bot.send_message(
-            chat_id=chat_id,
-            text="Если нужно заменить фото в КП:",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✏️ Изменить фото", callback_data="kpedit:start"),
-                InlineKeyboardButton("✅ Готово",         callback_data="kpedit:done"),
-            ]]),
-        )
-        return KP_PHOTO_EDIT
-    return WAIT_URL
+    return await _offer_photo_choice(chat_id, user.id, car_num, data_snapshot, ctx)
 
 
 # ── KP photo editing ──────────────────────────────────────────────────────────
@@ -1307,106 +1277,403 @@ async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     return await _show_settings_menu(update, ctx)
 
 
+def _fmt_setting(key: str) -> str:
+    label, unit, _ = _EDITABLE[key]
+    val = get_setting(key)
+    try:
+        num = float(val)
+        val = f"{num:,.0f}".replace(",", " ") if num >= 1000 else f"{num:g}"
+    except (TypeError, ValueError):
+        pass
+    return f"{label}: <b>{val}{(' ' + unit) if unit else ''}</b>"
+
+
+async def _reply(update_or_query, text: str, kb: InlineKeyboardMarkup) -> None:
+    """Отправка/редактирование — работает и с Update, и с CallbackQuery."""
+    if hasattr(update_or_query, "edit_message_text"):
+        await update_or_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    elif getattr(update_or_query, "callback_query", None):
+        await update_or_query.callback_query.edit_message_text(
+            text, reply_markup=kb, parse_mode="HTML"
+        )
+    else:
+        await update_or_query.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+
+
 async def _show_settings_menu(update_or_query, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    s    = get_all_settings()
+    r = get_rates()
+    when = r["rates_date"] or "не задавался"
+    who  = f" · {r['rates_set_by']}" if r["rates_set_by"] else ""
     text = (
-        f"⚙️ <b>Настройки</b>\n\n"
-        f"<b>ЕС/Минск</b>\n"
-        f"  N — EUR/USDT: <b>{s.get('rate_n', '?')}</b>\n"
-        f"  P — USDT/₽:   <b>{s.get('rate_p', '?')}</b>\n"
-        f"  R — ЭПТС/СБКТС: <b>{s.get('r_value', '?')} ₽</b>\n\n"
-        f"<b>ЕС/Культ40 + ЕС-МСК</b>\n"
-        f"  M — EUR/USD КК: <b>{s.get('rate_eur_usd', '?')}</b>\n"
-        f"  O — USD/₽ ЦБ:   <b>{s.get('rate_usd_rub', '?')}</b>\n\n"
-        f"Нажмите кнопку для изменения:"
+        "⚙️ <b>Настройки</b>\n\n"
+        f"💱 <b>Курс дня</b> ({when}{who})\n"
+        f"  EUR→USDT: <b>{r['rate_eur_usdt']}</b>\n"
+        f"  USDT→₽: <b>{r['rate_usdt_rub']}</b>\n\n"
+        "Выберите раздел:"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Курс N (EUR/USDT)",   callback_data="set:rate_n")],
-        [InlineKeyboardButton("📈 Курс P (USDT/₽)",     callback_data="set:rate_p")],
-        [InlineKeyboardButton("🔧 ЭПТС/СБКТС (₽)",     callback_data="set:r_value")],
-        [InlineKeyboardButton("💱 КК M (EUR/USD)",      callback_data="set:rate_eur_usd")],
-        [InlineKeyboardButton("💵 Курс O (USD/₽ ЦБ)",  callback_data="set:rate_usd_rub")],
-        [InlineKeyboardButton("👥 Администраторы",      callback_data="set:admins")],
-        [InlineKeyboardButton("🖼 Отладка фото",        callback_data="set:img_debug")],
+        [InlineKeyboardButton("💱 Изменить курс дня", callback_data="set:rates")],
+        [InlineKeyboardButton("📦 Тарифы",            callback_data="set:tariffs")],
+        [InlineKeyboardButton("🖼 Фото",              callback_data="set:photo")],
+        [InlineKeyboardButton("😀 Эмодзи марок",      callback_data="set:brands")],
+        [InlineKeyboardButton("👥 Администраторы",    callback_data="set:admins")],
+        [InlineKeyboardButton("🔍 Отладка фото",      callback_data="set:img_debug")],
         [InlineKeyboardButton("❌ Закрыть",           callback_data="set:close")],
     ])
-    if hasattr(update_or_query, "callback_query") and update_or_query.callback_query:
-        await update_or_query.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
-    elif hasattr(update_or_query, "message") and update_or_query.message:
-        await update_or_query.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+    await _reply(update_or_query, text, kb)
+    return SETTINGS_MENU
+
+
+async def _show_section(update_or_query, section: str) -> int:
+    """Раздел настроек: список значений + кнопка на каждое."""
+    titles = {
+        "rates":   ("💱 <b>Курс дня</b>", "Курс единый для всех направлений."),
+        "tariffs": ("📦 <b>Тарифы</b>",   "Нажмите на строку, чтобы изменить."),
+        "photo":   ("🖼 <b>Фото</b>",     "Шаг 2 — каждое второе фото: так в подборку попадает салон."),
+    }
+    head, hint = titles.get(section, ("⚙️ <b>Настройки</b>", ""))
+    keys = [k for k, (_, _, sec) in _EDITABLE.items() if sec == section]
+
+    text = head + "\n\n" + "\n".join(f"• {_fmt_setting(k)}" for k in keys) + f"\n\n<i>{hint}</i>"
+    rows = [
+        [InlineKeyboardButton(f"✏️ {_EDITABLE[k][0]}", callback_data=f"set:edit:{k}")]
+        for k in keys
+    ]
+    rows.append([InlineKeyboardButton("◀️ Назад", callback_data="set:back")])
+    await _reply(update_or_query, text, InlineKeyboardMarkup(rows))
     return SETTINGS_MENU
 
 
 async def settings_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    key   = query.data.split(":")[1]
+    parts = query.data.split(":")
+    key   = parts[1]
 
     if key == "close":
         await query.edit_message_text("⚙️ Настройки закрыты.")
         return WAIT_URL
 
+    if key == "back":
+        return await _show_settings_menu(query, ctx)
+
     if key == "admins":
         return await _show_admin_list(query, ctx)
 
+    if key == "brands":
+        return await _show_brand_list(query, ctx)
+
+    if key in ("rates", "tariffs", "photo"):
+        return await _show_section(query, key)
+
     if key == "img_debug":
-        s = get_all_settings()
         ctx.user_data["_img_debug_mode"] = True
         await query.edit_message_text(
-            f"🖼 <b>Отладка фото</b>\n\n"
-            f"Текущие настройки:\n"
-            f"• Пропустить первых: <b>{s.get('img_offset', 0)}</b> фото\n"
-            f"• Взять: <b>{s.get('img_count', 6)}</b> фото\n\n"
-            f"Отправьте ссылку <b>mobile.de</b> — бот пришлёт все найденные фото пронумерованно.",
+            "🔍 <b>Отладка фото</b>\n\n"
+            "Отправьте ссылку — бот пришлёт все найденные фото пронумерованно, "
+            "чтобы было видно, какие попадают в КП.",
             parse_mode="HTML",
         )
         return WAIT_URL
 
-    labels = {
-        "rate_n":       "курс N (EUR/USDT)",
-        "rate_p":       "курс P (USDT/₽)",
-        "r_value":      "ЭПТС/СБКТС ₽",
-        "rate_eur_usd": "КК M (EUR/USD, 4 знака после запятой)",
-        "rate_usd_rub": "курс O (USD/₽ от ЦБ)",
-    }
-    ctx.user_data["_setting_key"] = key
-    await query.edit_message_text(
-        f"Введите новое значение для <b>{labels.get(key, key)}</b>:",
-        parse_mode="HTML",
-    )
-    return SETTINGS_AWAIT_VALUE
+    if key == "edit" and len(parts) > 2:
+        skey = parts[2]
+        if skey not in _EDITABLE:
+            return await _show_settings_menu(query, ctx)
+        label, unit, section = _EDITABLE[skey]
+        ctx.user_data["_setting_key"] = skey
+        await query.edit_message_text(
+            f"✏️ <b>{label}</b>\n"
+            f"Сейчас: <b>{get_setting(skey)}{(' ' + unit) if unit else ''}</b>\n\n"
+            f"Введите новое значение:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data=f"set:{section}")
+            ]]),
+        )
+        return SETTINGS_AWAIT_VALUE
+
+    return await _show_settings_menu(query, ctx)
 
 
 async def settings_receive_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     key = ctx.user_data.pop("_setting_key", None)
-    if not key:
+    if not key or key not in _EDITABLE:
         await update.message.reply_text("❌ Ошибка состояния. Используй /settings заново.")
         return WAIT_URL
 
     val = _parse_number((update.message.text or "").strip())
     if val is None:
-        await update.message.reply_text("Введите число, например: 1.1621")
+        await update.message.reply_text("Введите число, например: 4900")
         ctx.user_data["_setting_key"] = key
         return SETTINGS_AWAIT_VALUE
 
-    labels = {
-        "rate_n":       "Курс N (EUR/USDT)",
-        "rate_p":       "Курс P (USDT/₽)",
-        "r_value":      "ЭПТС/СБКТС ₽",
-        "rate_eur_usd": "КК M (EUR/USD)",
-        "rate_usd_rub": "Курс O (USD/₽ ЦБ)",
-    }
+    label, unit, section = _EDITABLE[key]
+
+    if key in ("img_count", "img_step", "img_offset"):
+        val = max(0, int(val))
+        if key in ("img_count", "img_step") and val < 1:
+            val = 1
+
     set_setting(key, str(val))
+
+    # Правка курса руками = курс на сегодня
+    if section == "rates":
+        user = update.effective_user
+        set_setting("rates_date", _today())
+        set_setting("rates_set_by", user.first_name or user.username or "")
+
     await update.message.reply_text(
-        f"✅ <b>{labels.get(key, key)}</b> → <b>{val}</b>\n\n"
-        f"Используй /settings для изменения других значений.\n"
-        f"Отправь ссылку mobile.de для нового расчёта.",
+        f"✅ <b>{label}</b> → <b>{val}{(' ' + unit) if unit else ''}</b>",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ К настройкам", callback_data=f"set:{section}")
+        ]]),
+    )
+    return SETTINGS_MENU
+
+
+# ── Курс дня ──────────────────────────────────────────────────────────────────
+
+def _rates_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("💱 Ввести курс", callback_data="rates:set")
+    ]])
+
+
+async def job_ask_rates(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Каждое утро в 8:00 МСК просим админов задать курс на день."""
+    _reload_admin_ids()
+    r = get_rates()
+    text = (
+        f"☀️ <b>Доброе утро!</b>\n"
+        f"Нужен курс на <b>{_today()}</b>.\n\n"
+        f"Вчерашний: EUR→USDT <b>{r['rate_eur_usdt']}</b>, USDT→₽ <b>{r['rate_usdt_rub']}</b>\n\n"
+        f"Кто первым введёт — тот курс и встанет на весь день."
+    )
+    for admin_id in ADMIN_IDS:
+        try:
+            await ctx.bot.send_message(
+                chat_id=admin_id, text=text, parse_mode="HTML", reply_markup=_rates_kb()
+            )
+        except Exception:
+            continue   # админ не начинал диалог с ботом — просто пропускаем
+
+
+async def cmd_rates(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """/rates — задать курс вручную в любой момент."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Только для администратора.")
+        return WAIT_URL
+    r = get_rates()
+    await update.message.reply_text(
+        f"💱 <b>Курс дня</b>\n"
+        f"Сейчас: EUR→USDT <b>{r['rate_eur_usdt']}</b>, USDT→₽ <b>{r['rate_usdt_rub']}</b>\n"
+        f"Задан: <b>{r['rates_date'] or 'никогда'}</b>"
+        + (f" ({r['rates_set_by']})" if r["rates_set_by"] else ""),
+        parse_mode="HTML",
+        reply_markup=_rates_kb(),
     )
     return WAIT_URL
 
 
-# ── Photo debug (settings) ────────────────────────────────────────────────────
+async def rates_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Кнопка «Ввести курс». Если курс на сегодня уже есть — не пускаем."""
+    query = update.callback_query
+    await query.answer()
+
+    if update.effective_user.id not in ADMIN_IDS:
+        await query.answer("⛔ Только для администратора.", show_alert=True)
+        return WAIT_URL
+
+    r = get_rates()
+    if r["rates_date"] == _today():
+        who = f" ({r['rates_set_by']})" if r["rates_set_by"] else ""
+        await query.edit_message_text(
+            f"✅ Курс на сегодня уже выставлен{who}:\n"
+            f"EUR→USDT <b>{r['rate_eur_usdt']}</b>, USDT→₽ <b>{r['rate_usdt_rub']}</b>\n\n"
+            f"<i>Уточните позже — курс меняется раз в день.</i>",
+            parse_mode="HTML",
+        )
+        return WAIT_URL
+
+    await query.edit_message_text(
+        f"💱 Курс на <b>{_today()}</b>\n\n"
+        f"Введите <b>EUR→USDT</b> (например: 1.1621):",
+        parse_mode="HTML",
+    )
+    return RATES_AWAIT_EUR
+
+
+async def rates_receive_eur(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    val = _parse_number((update.message.text or "").strip())
+    if val is None or val <= 0:
+        await update.message.reply_text("Введите число, например: 1.1621")
+        return RATES_AWAIT_EUR
+    ctx.user_data["_rate_eur_usdt"] = val
+    await update.message.reply_text(
+        f"✅ EUR→USDT: <b>{val}</b>\n\nТеперь введите <b>USDT→₽</b> (например: 79.7):",
+        parse_mode="HTML",
+    )
+    return RATES_AWAIT_RUB
+
+
+async def rates_receive_rub(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    val = _parse_number((update.message.text or "").strip())
+    if val is None or val <= 0:
+        await update.message.reply_text("Введите число, например: 79.7")
+        return RATES_AWAIT_RUB
+
+    eur = ctx.user_data.pop("_rate_eur_usdt", None)
+    if eur is None:
+        await update.message.reply_text("❌ Ошибка состояния, начните заново: /rates")
+        return WAIT_URL
+
+    # Пока вводили — курс мог задать другой админ
+    r = get_rates()
+    if r["rates_date"] == _today():
+        who = f" ({r['rates_set_by']})" if r["rates_set_by"] else ""
+        await update.message.reply_text(
+            f"⚠️ Курс на сегодня уже выставлен{who}: "
+            f"EUR→USDT <b>{r['rate_eur_usdt']}</b>, USDT→₽ <b>{r['rate_usdt_rub']}</b>\n"
+            f"Ваши значения не сохранены.",
+            parse_mode="HTML",
+        )
+        return WAIT_URL
+
+    user = update.effective_user
+    who  = user.first_name or user.username or str(user.id)
+    set_rates(eur, val, _today(), who)
+
+    await update.message.reply_text(
+        f"✅ <b>Курс на {_today()} принят</b>\n"
+        f"EUR→USDT: <b>{eur}</b>\n"
+        f"USDT→₽: <b>{val}</b>\n\n"
+        f"Все расчёты сегодня идут по нему.",
+        parse_mode="HTML",
+        reply_markup=_main_kb(user.id in ADMIN_IDS),
+    )
+    return WAIT_URL
+
+
+# ── Эмодзи марок (премиум custom emoji) ──────────────────────────────────────
+
+async def _show_brand_list(query_or_message, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    brands = get_all_brand_emoji()
+    price_id = get_setting("price_emoji_id")
+
+    lines = [
+        "😀 <b>Эмодзи марок</b>\n",
+        "Бот подставляет эмодзи в КП по первому слову названия авто "
+        "(«<i>Skoda</i> Superb Combi…» → эмодзи Skoda).\n",
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    if brands:
+        for b in brands:
+            lines.append(f"• {b['emoji']} {b['brand'].capitalize()}")
+            rows.append([InlineKeyboardButton(
+                f"❌ {b['brand'].capitalize()}", callback_data=f"brand:del:{b['brand']}"
+            )])
+    else:
+        lines.append("<i>Пока ничего не добавлено.</i>")
+
+    lines.append(f"\n💸 Эмодзи у цены: <b>{'задан' if price_id else 'обычный 💸'}</b>")
+
+    rows.append([InlineKeyboardButton("➕ Добавить марку", callback_data="brand:add")])
+    rows.append([InlineKeyboardButton("💸 Эмодзи цены",    callback_data="brand:price")])
+    rows.append([InlineKeyboardButton("◀️ Назад",          callback_data="brand:back")])
+
+    await _reply(query_or_message, "\n".join(lines), InlineKeyboardMarkup(rows))
+    return SETTINGS_MENU
+
+
+async def brand_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    action = query.data.split(":")
+
+    if action[1] == "back":
+        return await _show_settings_menu(query, ctx)
+
+    if action[1] == "del":
+        remove_brand_emoji(action[2])
+        return await _show_brand_list(query, ctx)
+
+    if action[1] == "price":
+        ctx.user_data["_brand_target"] = "_price"
+        await query.edit_message_text(
+            "💸 Пришлите <b>премиум-эмодзи</b>, который будет стоять перед ценой.\n\n"
+            "<i>Просто отправьте его сообщением — бот запомнит.</i>",
+            parse_mode="HTML",
+        )
+        return BRAND_AWAIT_EMOJI
+
+    if action[1] == "add":
+        await query.edit_message_text(
+            "Введите <b>марку</b> так, как она пишется в названии авто "
+            "(например: <code>Skoda</code>):",
+            parse_mode="HTML",
+        )
+        return BRAND_AWAIT_NAME
+
+    return await _show_brand_list(query, ctx)
+
+
+async def brand_receive_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    name = (update.message.text or "").strip().split()[0] if (update.message.text or "").strip() else ""
+    if not name:
+        await update.message.reply_text("Введите марку, например: Skoda")
+        return BRAND_AWAIT_NAME
+
+    ctx.user_data["_brand_target"] = name
+    await update.message.reply_text(
+        f"Марка: <b>{name}</b>\n\n"
+        f"Теперь пришлите <b>премиум-эмодзи</b> этой марки одним сообщением.",
+        parse_mode="HTML",
+    )
+    return BRAND_AWAIT_EMOJI
+
+
+def _extract_custom_emoji(msg) -> tuple[str, str] | None:
+    """(custom_emoji_id, сам символ) из сообщения — текстом или стикером."""
+    for ent in list(msg.entities or ()) + list(msg.caption_entities or ()):
+        if ent.type == "custom_emoji" and ent.custom_emoji_id:
+            src = msg.text or msg.caption or ""
+            return ent.custom_emoji_id, src[ent.offset:ent.offset + ent.length]
+    sticker = getattr(msg, "sticker", None)
+    if sticker is not None and getattr(sticker, "custom_emoji_id", None):
+        return sticker.custom_emoji_id, sticker.emoji or "🚗"
+    return None
+
+
+async def brand_receive_emoji(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    target = ctx.user_data.pop("_brand_target", "")
+    found  = _extract_custom_emoji(update.message)
+
+    if not found:
+        ctx.user_data["_brand_target"] = target
+        await update.message.reply_text(
+            "❌ Это не премиум-эмодзи. Нужен именно анимированный эмодзи из премиум-пака "
+            "(обычные смайлики не подойдут). Пришлите ещё раз."
+        )
+        return BRAND_AWAIT_EMOJI
+
+    emoji_id, char = found
+    user = update.effective_user
+
+    if target == "_price":
+        set_setting("price_emoji_id", emoji_id)
+        set_setting("price_emoji", char)
+        await update.message.reply_text(f"✅ Эмодзи цены сохранён: {char}")
+    else:
+        set_brand_emoji(target, emoji_id, char, user.first_name or "")
+        await update.message.reply_text(
+            f"✅ {char} — сохранён для марки <b>{target}</b>.\n"
+            f"Теперь во всех КП с этой маркой он подставится автоматически.",
+            parse_mode="HTML",
+        )
+    return await _show_brand_list(update, ctx)
+
 
 # ── Admin management ──────────────────────────────────────────────────────────
 
@@ -1539,16 +1806,24 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main() -> None:
-    if not TOKEN:
-        print("ERROR: TELEGRAM_BOT_TOKEN not set in .env")
-        sys.exit(1)
+async def _post_init(app) -> None:
+    """Кнопка «Меню» у бота открывает мини-апп."""
+    if not WEB_APP_URL:
+        return
+    try:
+        await app.bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="Приложение", web_app=WebAppInfo(url=f"{WEB_APP_URL}/")
+            )
+        )
+        print(f"Mini App menu button → {WEB_APP_URL}")
+    except Exception as e:
+        print(f"WARNING: не удалось поставить кнопку мини-аппа: {e}")
 
-    init_db()
-    _reload_admin_ids()
-    print(f"Database initialized. Admin IDs: {ADMIN_IDS}")
 
-    app = ApplicationBuilder().token(TOKEN).build()
+def build_application(token: str):
+    """Собирает Application со всеми хендлерами (вынесено для тестов)."""
+    app = ApplicationBuilder().token(token).post_init(_post_init).build()
 
     # Exclude keyboard button texts from free-text state handlers
     _text = filters.TEXT & ~filters.COMMAND & ~_KB_FILTER
@@ -1558,11 +1833,21 @@ def main() -> None:
             CommandHandler("start",    cmd_start),
             CommandHandler("pending",  cmd_pending),
             CommandHandler("settings", cmd_settings),
-            MessageHandler(_mobile_de_filter, receive_url),
+            CommandHandler("rates",    cmd_rates),
+            CommandHandler("app",      cmd_app),
+            # Утренний запрос курса приходит вне диалога — кнопка должна работать всегда
+            CallbackQueryHandler(rates_start, pattern=r"^rates:"),
+            MessageHandler(_link_filter, receive_url),
         ],
         states={
             WAIT_URL: [
                 MessageHandler(_text, receive_url),
+            ],
+            RATES_AWAIT_EUR: [
+                MessageHandler(_text, rates_receive_eur),
+            ],
+            RATES_AWAIT_RUB: [
+                MessageHandler(_text, rates_receive_rub),
             ],
             ASK_DIRECTION: [
                 CallbackQueryHandler(receive_direction, pattern=r"^dir:"),
@@ -1575,6 +1860,9 @@ def main() -> None:
             ],
             ASK_BUYBACK: [
                 CallbackQueryHandler(receive_buyback, pattern=r"^buyback:"),
+            ],
+            ASK_BUYBACK_MANUAL: [
+                MessageHandler(_text, receive_buyback_manual),
             ],
             ASK_CUSTOMS: [
                 CallbackQueryHandler(receive_customs_defer, pattern=r"^customs:defer$"),
@@ -1594,6 +1882,16 @@ def main() -> None:
             ],
             SETTINGS_MENU: [
                 CallbackQueryHandler(settings_button, pattern=r"^set:"),
+                CallbackQueryHandler(brand_button,    pattern=r"^brand:"),
+                CallbackQueryHandler(admin_mgmt_button, pattern=r"^adm:"),
+            ],
+            BRAND_AWAIT_NAME: [
+                CallbackQueryHandler(brand_button, pattern=r"^brand:"),
+                MessageHandler(_text, brand_receive_name),
+            ],
+            BRAND_AWAIT_EMOJI: [
+                CallbackQueryHandler(brand_button, pattern=r"^brand:"),
+                MessageHandler(_text | filters.Sticker.ALL, brand_receive_emoji),
             ],
             SETTINGS_AWAIT_VALUE: [
                 MessageHandler(_text, settings_receive_value),
@@ -1621,6 +1919,9 @@ def main() -> None:
             KP_PHOTO_EDIT: [
                 CallbackQueryHandler(kp_edit_button, pattern=r"^kpedit:"),
             ],
+            PHOTO_CHOICE: [
+                CallbackQueryHandler(photo_choice_auto, pattern=r"^autokp:"),
+            ],
             ADMIN_LIST: [
                 CallbackQueryHandler(admin_mgmt_button,   pattern=r"^adm:"),
             ],
@@ -1638,6 +1939,9 @@ def main() -> None:
             CommandHandler("start",    cmd_start),
             CommandHandler("pending",  cmd_pending),
             CommandHandler("settings", cmd_settings),
+            CommandHandler("rates",    cmd_rates),
+            CommandHandler("app",      cmd_app),
+            CallbackQueryHandler(rates_start, pattern=r"^rates:"),
             # Persistent keyboard buttons work from ANY state
             MessageHandler(filters.Regex(rf"^{re.escape(_BTN_HISTORY)}$"),  show_history),
             MessageHandler(filters.Regex(rf"^{re.escape(_BTN_PENDING)}$"),  cmd_pending),
@@ -1652,6 +1956,28 @@ def main() -> None:
     )
 
     app.add_handler(conv)
+
+    # Утренний запрос курса — 8:00 по Москве
+    if app.job_queue:
+        app.job_queue.run_daily(job_ask_rates, time=RATES_ASK_TIME, name="ask_rates")
+        print(f"Daily rates prompt scheduled at {RATES_ASK_TIME}")
+    else:
+        print("WARNING: JobQueue недоступен — утренний запрос курса не будет работать. "
+              "Установите python-telegram-bot[job-queue].")
+
+    return app
+
+
+def main() -> None:
+    if not TOKEN:
+        print("ERROR: TELEGRAM_BOT_TOKEN not set in .env")
+        sys.exit(1)
+
+    init_db()
+    _reload_admin_ids()
+    print(f"Database initialized. Admin IDs: {ADMIN_IDS}")
+
+    app = build_application(TOKEN)
 
     print("Bot started. Press Ctrl+C to stop.")
     # Python 3.14: get_event_loop() больше не создаёт loop автоматически,

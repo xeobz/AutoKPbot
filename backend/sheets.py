@@ -11,7 +11,29 @@ from pathlib import Path
 import gspread
 from dotenv import load_dotenv
 
+from storage import get_tariffs
+
 log = logging.getLogger(__name__)
+
+
+# ── Формулы, зависящие от тарифов ────────────────────────────────────────────
+
+def _buyback_cell(data: dict, netto_ref: str):
+    """
+    Выкуп: формула от процента (обычный случай) либо фиксированная сумма,
+    если менеджер выбрал минималку или ввёл сумму руками.
+    """
+    if data.get("buyback_fixed"):
+        return data.get("buyback_val", 0) or 0
+    pct = data.get("buyback_pct", 6)
+    factor = f"{1 + pct / 100:.2f}".replace(".", ",")   # 10% → "1,10"
+    return f"={netto_ref}*{factor}-{netto_ref}"
+
+
+def _invoice_cell(netto_ref: str, t: dict) -> str:
+    """Инвойс: НЕТТО * (1 + %) + фикс − НЕТТО."""
+    factor = f"{1 + t['invoice_pct'] / 100:.3f}".replace(".", ",")   # 1.3% → "1,013"
+    return f"=({netto_ref}*{factor}+{int(t['invoice_fix'])})-{netto_ref}"
 
 _RETRY_EXCEPTIONS = (
     gspread.exceptions.APIError,
@@ -109,7 +131,7 @@ def append_car_row(data: dict) -> int:
     """
     Writes data columns to the sheet row, leaving formula columns (H, L, M, O, Q, T, V) untouched.
     data keys: counterparty, url, car_name, price_eur, vat, buyback_pct,
-               rate_n, rate_p, r_value, customs_eur, util_rub
+               rate_eur_usdt, rate_usdt_rub, epts_rub, customs_eur, util_rub
     Returns the assigned car number (column A).
     """
     ws = _get_worksheet()
@@ -119,8 +141,7 @@ def append_car_row(data: dict) -> int:
     # which would turn e.g. 1060 → "25.11.1902" (date serial)
     _with_retry(ws.format, f"A{r}", {"numberFormat": {"type": "NUMBER", "pattern": "0"}})
 
-    pct = data.get("buyback_pct", 6)
-    factor = f"{1 + pct / 100:.2f}".replace(".", ",")  # e.g. 10% → "1,10"
+    t = get_tariffs()
 
     _with_retry(ws.batch_update,  # type: ignore[arg-type]
         [
@@ -138,25 +159,25 @@ def append_car_row(data: dict) -> int:
             {"range": f"H{r}", "values": [[f"=G{r}/$I$2"]]},
             # I: НДС (per-row, informational)
             {"range": f"I{r}", "values": [[data.get("vat", 1.19)]]},
-            # J: логистика (фиксировано 5300)
-            {"range": f"J{r}", "values": [[5300]]},
-            # K: выкуп — dynamic formula with manager's chosen %
-            {"range": f"K{r}", "values": [[f"=H{r}*{factor}-H{r}"]]},
+            # J: логистика (тариф из настроек)
+            {"range": f"J{r}", "values": [[data.get("logistics", t["logistics_minsk"])]]},
+            # K: выкуп — формула от % либо фиксированная сумма
+            {"range": f"K{r}", "values": [[_buyback_cell(data, f"H{r}")]]},
             # L: инвойс
-            {"range": f"L{r}", "values": [[f"=(H{r}*1,013+100)-H{r}"]]},
+            {"range": f"L{r}", "values": [[_invoice_cell(f"H{r}", t)]]},
             # M: итого EUR
-            {"range": f"M{r}", "values": [[f"=H{r}+J{r}+K{r}+L{r}+350"]]},
+            {"range": f"M{r}", "values": [[f"=H{r}+J{r}+K{r}+L{r}+{int(t['extra_fix'])}"]]},
             # N: курс EUR/USDT
-            {"range": f"N{r}", "values": [[data.get("rate_n", 1.1621)]]},
+            {"range": f"N{r}", "values": [[data.get("rate_eur_usdt", 1.1621)]]},
             # O: итого USDT
             {"range": f"O{r}", "values": [[f"=M{r}*N{r}"]]},
             # P: курс USDT/₽
-            {"range": f"P{r}", "values": [[data.get("rate_p", 79.7)]]},
+            {"range": f"P{r}", "values": [[data.get("rate_usdt_rub", 79.7)]]},
             # Q: итого ₽
             {"range": f"Q{r}", "values": [[f"=O{r}*P{r}"]]},
             # R: ЭПТС/СБКТС, S: таможня EUR
             {"range": f"R{r}:S{r}", "values": [[
-                data.get("r_value", 3500),
+                data.get("epts_rub", t["epts_rub"]),
                 data.get("customs_eur", "") or "",
             ]]},
             # T: таможня ₽
@@ -175,13 +196,11 @@ def _update_minsk_row(sheet_row: int, data: dict) -> None:
     """Re-write editable cells in a Минск row (after history edit)."""
     ws = _get_worksheet()
     r = sheet_row
-    pct = data.get("buyback_pct", 6)
-    factor = f"{1 + pct / 100:.2f}".replace(".", ",")
     _with_retry(ws.batch_update,  # type: ignore[arg-type]
         [
             {"range": f"B{r}",   "values": [[data.get("counterparty", "")]]},
             {"range": f"I{r}",   "values": [[data.get("vat", 1.19)]]},
-            {"range": f"K{r}",   "values": [[f"=H{r}*{factor}-H{r}"]]},
+            {"range": f"K{r}",   "values": [[_buyback_cell(data, f"H{r}")]]},
             {"range": f"S{r}",   "values": [[data.get("customs_eur", "") or ""]]},
             {"range": f"U{r}",   "values": [[data.get("util_rub", "") or ""]]},
         ],
@@ -196,8 +215,7 @@ def append_kult40_row(data: dict) -> tuple[int, int]:
 
     _with_retry(ws.format, f"A{r}", {"numberFormat": {"type": "NUMBER", "pattern": "0"}})
 
-    pct    = data.get("buyback_pct", 8)
-    factor = f"{1 + pct / 100:.2f}".replace(".", ",")
+    t = get_tariffs()
 
     _with_retry(ws.batch_update,
         [
@@ -212,18 +230,18 @@ def append_kult40_row(data: dict) -> tuple[int, int]:
             {"range": f"F{r}", "values": [[data.get("price_eur", 0)]]},          # БРУТТО
             {"range": f"G{r}", "values": [[f"=F{r}/H{r}"]]},                     # НЕТТО
             {"range": f"H{r}", "values": [[data.get("vat", 1.19)]]},              # НДС
-            {"range": f"I{r}", "values": [[data.get("logistics", 4100)]]},        # Логистика
-            {"range": f"J{r}", "values": [[f"=G{r}*{factor}-G{r}"]]},            # Выкуп
-            {"range": f"K{r}", "values": [[f"=(G{r}*1,013+100)-G{r}"]]},         # Инвойс
-            {"range": f"L{r}", "values": [[f"=G{r}+I{r}+J{r}+K{r}+350"]]},      # Итого EUR
-            {"range": f"M{r}", "values": [[data.get("rate_eur_usd", 1.10)]]},    # КК EUR/USD
+            {"range": f"I{r}", "values": [[data.get("logistics", t["logistics_kult40"])]]},
+            {"range": f"J{r}", "values": [[_buyback_cell(data, f"G{r}")]]},      # Выкуп
+            {"range": f"K{r}", "values": [[_invoice_cell(f"G{r}", t)]]},         # Инвойс
+            {"range": f"L{r}", "values": [[f"=G{r}+I{r}+J{r}+K{r}+{int(t['extra_fix'])}"]]},
+            {"range": f"M{r}", "values": [[data.get("rate_eur_usdt", 1.1621)]]}, # Курс EUR/USDT
             {"range": f"N{r}", "values": [[f"=L{r}*M{r}"]]},                     # USDT
-            {"range": f"O{r}", "values": [[data.get("rate_usd_rub", 80.0)]]},    # USD/RUB
+            {"range": f"O{r}", "values": [[data.get("rate_usdt_rub", 79.7)]]},   # Курс USDT/₽
             {"range": f"P{r}", "values": [[f"=N{r}*O{r}"]]},                     # RUB
-            {"range": f"Q{r}", "values": [[100_000]]},                            # Брокер (fixed)
+            {"range": f"Q{r}", "values": [[t["broker_rub"]]]},                   # Брокер
             {"range": f"R{r}", "values": [[data.get("evacuator_rub", 0) or 0]]}, # Эвакуатор
             {"range": f"S{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]}, # Таможня ТКС
-            {"range": f"T{r}", "values": [[5_200]]},                              # Утиль (fixed)
+            {"range": f"T{r}", "values": [[t["util_fixed_rub"]]]},               # Утиль
             {"range": f"U{r}", "values": [[f"=P{r}+Q{r}+R{r}+S{r}+T{r}"]]},    # Итого
         ],
         value_input_option="USER_ENTERED",
@@ -238,8 +256,7 @@ def append_msk_row(data: dict) -> tuple[int, int]:
 
     _with_retry(ws.format, f"A{r}", {"numberFormat": {"type": "NUMBER", "pattern": "0"}})
 
-    pct    = data.get("buyback_pct", 8)
-    factor = f"{1 + pct / 100:.2f}".replace(".", ",")
+    t = get_tariffs()
 
     _with_retry(ws.batch_update,
         [
@@ -253,18 +270,18 @@ def append_msk_row(data: dict) -> tuple[int, int]:
             {"range": f"F{r}", "values": [[data.get("price_eur", 0)]]},
             {"range": f"G{r}", "values": [[f"=F{r}/H{r}"]]},
             {"range": f"H{r}", "values": [[data.get("vat", 1.19)]]},
-            {"range": f"I{r}", "values": [[data.get("logistics", 2500)]]},
-            {"range": f"J{r}", "values": [[f"=G{r}*{factor}-G{r}"]]},
-            {"range": f"K{r}", "values": [[f"=(G{r}*1,013+100)-G{r}"]]},
-            {"range": f"L{r}", "values": [[f"=G{r}+I{r}+J{r}+K{r}+350"]]},
-            {"range": f"M{r}", "values": [[data.get("rate_eur_usd", 1.10)]]},
+            {"range": f"I{r}", "values": [[data.get("logistics", t["logistics_msk"])]]},
+            {"range": f"J{r}", "values": [[_buyback_cell(data, f"G{r}")]]},
+            {"range": f"K{r}", "values": [[_invoice_cell(f"G{r}", t)]]},
+            {"range": f"L{r}", "values": [[f"=G{r}+I{r}+J{r}+K{r}+{int(t['extra_fix'])}"]]},
+            {"range": f"M{r}", "values": [[data.get("rate_eur_usdt", 1.1621)]]},
             {"range": f"N{r}", "values": [[f"=L{r}*M{r}"]]},
-            {"range": f"O{r}", "values": [[data.get("rate_usd_rub", 80.0)]]},
+            {"range": f"O{r}", "values": [[data.get("rate_usdt_rub", 79.7)]]},
             {"range": f"P{r}", "values": [[f"=N{r}*O{r}"]]},
-            {"range": f"Q{r}", "values": [[100_000]]},                            # Брокер (fixed)
+            {"range": f"Q{r}", "values": [[t["broker_rub"]]]},                     # Брокер
             {"range": f"R{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]}, # Таможня ТКС
-            {"range": f"S{r}", "values": [[5_200]]},                              # Утиль (fixed)
-            {"range": f"T{r}", "values": [[f"=P{r}+Q{r}+R{r}+S{r}"]]},          # Итого
+            {"range": f"S{r}", "values": [[t["util_fixed_rub"]]]},                 # Утиль
+            {"range": f"T{r}", "values": [[f"=P{r}+Q{r}+R{r}+S{r}"]]},           # Итого
         ],
         value_input_option="USER_ENTERED",
     )
@@ -275,13 +292,11 @@ def update_kult40_row(sheet_row: int, data: dict) -> None:
     """Re-write editable cells in a Культ40 row after history edit."""
     ws = _get_kult40_worksheet()
     r  = sheet_row
-    pct    = data.get("buyback_pct", 8)
-    factor = f"{1 + pct / 100:.2f}".replace(".", ",")
     _with_retry(ws.batch_update,
         [
             {"range": f"B{r}", "values": [[data.get("counterparty", "")]]},
             {"range": f"H{r}", "values": [[data.get("vat", 1.19)]]},
-            {"range": f"J{r}", "values": [[f"=G{r}*{factor}-G{r}"]]},
+            {"range": f"J{r}", "values": [[_buyback_cell(data, f"G{r}")]]},
             {"range": f"R{r}", "values": [[data.get("evacuator_rub", 0) or 0]]},
             {"range": f"S{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]},
         ],
@@ -293,13 +308,11 @@ def update_msk_row(sheet_row: int, data: dict) -> None:
     """Re-write editable cells in an МСК row after history edit."""
     ws = _get_msk_worksheet()
     r  = sheet_row
-    pct    = data.get("buyback_pct", 8)
-    factor = f"{1 + pct / 100:.2f}".replace(".", ",")
     _with_retry(ws.batch_update,
         [
             {"range": f"B{r}", "values": [[data.get("counterparty", "")]]},
             {"range": f"H{r}", "values": [[data.get("vat", 1.19)]]},
-            {"range": f"J{r}", "values": [[f"=G{r}*{factor}-G{r}"]]},
+            {"range": f"J{r}", "values": [[_buyback_cell(data, f"G{r}")]]},
             {"range": f"R{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]},
         ],
         value_input_option="USER_ENTERED",
