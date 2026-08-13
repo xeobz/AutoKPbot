@@ -3,6 +3,7 @@ name: Deploy
 on:
   push:
     branches: [main]
+  workflow_dispatch:        # позволяет перезапустить деплой руками из вкладки Actions
 
 jobs:
   deploy:
@@ -42,6 +43,28 @@ jobs:
             # ── Перезапускаем бота и мини-апп ──────────────────────────────
             systemctl restart autokpbot
             systemctl restart autokpweb || echo "⚠️ autokpweb не установлен — см. DEPLOY.md"
-            echo "✅ Деплой завершён. Статус:"
+
+            # ── Проверяем, что всё поднялось ───────────────────────────────
+            sleep 5
+            echo "Статус сервисов:"
             systemctl is-active autokpbot
             systemctl is-active autokpweb || true
+
+            if systemctl is-enabled autokpweb >/dev/null 2>&1; then
+              echo "Проверка мини-аппа:"
+              curl -fsS -m 15 http://127.0.0.1:8000/health || {
+                echo "❌ мини-апп не отвечает на /health"
+                journalctl -u autokpweb -n 30 --no-pager
+                exit 1
+              }
+              echo
+            fi
+
+            # Бот не должен падать сразу после старта
+            if ! systemctl is-active --quiet autokpbot; then
+              echo "❌ бот не запустился"
+              journalctl -u autokpbot -n 30 --no-pager
+              exit 1
+            fi
+
+            echo "✅ Деплой завершён"
