@@ -1572,8 +1572,9 @@ async def _show_brand_list(query_or_message, ctx: ContextTypes.DEFAULT_TYPE) -> 
 
     lines = [
         "😀 <b>Эмодзи марок</b>\n",
-        "Бот подставляет эмодзи в КП по первому слову названия авто "
-        "(«<i>Skoda</i> Superb Combi…» → эмодзи Skoda).\n",
+        "Бот подставляет эмодзи в КП по марке из названия авто "
+        "(«<i>Skoda</i> Superb Combi…» → эмодзи Skoda).\n"
+        "Составные марки пишите двумя словами: <code>Alfa Romeo</code>.\n",
     ]
     rows: list[list[InlineKeyboardButton]] = []
     if brands:
@@ -1628,7 +1629,8 @@ async def brand_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def brand_receive_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    name = (update.message.text or "").strip().split()[0] if (update.message.text or "").strip() else ""
+    # До двух слов — чтобы работали составные марки: Alfa Romeo, Land Rover
+    name = " ".join((update.message.text or "").strip().split()[:2])
     if not name:
         await update.message.reply_text("Введите марку, например: Skoda")
         return BRAND_AWAIT_NAME
@@ -1814,6 +1816,36 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+class StaleCallbackHandler(CallbackQueryHandler):
+    """
+    Ловит нажатия кнопок, которые диалог обработать не может — например, из
+    сообщений, отправленных до перезапуска бота. Без него такое нажатие
+    остаётся без ответа и выглядит как зависший бот.
+
+    Работает в отдельной группе, поэтому сначала спрашивает у диалога,
+    справится ли он сам: PTB отдаёт апдейт во все группы подряд, и без этой
+    проверки перехватчик отвечал бы поверх нормальных кнопок.
+    """
+
+    def __init__(self, conv: ConversationHandler, callback):
+        super().__init__(callback)
+        self._conv = conv
+
+    def check_update(self, update: object):
+        if self._conv.check_update(update):
+            return None
+        return super().check_update(update)
+
+
+async def stale_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ответ на устаревшую кнопку — вместо молчания."""
+    query = update.callback_query
+    await query.answer(
+        "Кнопка устарела — бот перезапускался.\nОткройте раздел заново кнопкой снизу.",
+        show_alert=True,
+    )
+
+
 async def _post_init(app) -> None:
     """Кнопка «Меню» у бота открывает мини-апп."""
     if not WEB_APP_URL:
@@ -1854,11 +1886,14 @@ def build_application(token: str):
             # Кнопки под сообщениями, которые могли прийти до перезапуска:
             # утренний запрос курса, меню настроек, история, выбор фото —
             # все они читают данные из базы, поэтому работают и без диалога
-            CallbackQueryHandler(rates_start,       pattern=r"^rates:"),
-            CallbackQueryHandler(settings_button,   pattern=r"^set:"),
-            CallbackQueryHandler(history_open_item, pattern=r"^hist:\d+$"),
-            CallbackQueryHandler(photo_choice_auto, pattern=r"^autokp:"),
-            CallbackQueryHandler(kp_edit_button,    pattern=r"^kpedit:"),
+            CallbackQueryHandler(rates_start,        pattern=r"^rates:"),
+            CallbackQueryHandler(settings_button,    pattern=r"^set:"),
+            CallbackQueryHandler(brand_button,       pattern=r"^brand:"),
+            CallbackQueryHandler(admin_mgmt_button,  pattern=r"^adm:"),
+            CallbackQueryHandler(history_open_item,  pattern=r"^hist:\d+$"),
+            CallbackQueryHandler(pending_pick,       pattern=r"^pending_pick:"),
+            CallbackQueryHandler(photo_choice_auto,  pattern=r"^autokp:"),
+            CallbackQueryHandler(kp_edit_button,     pattern=r"^kpedit:"),
             MessageHandler(_link_filter, receive_url),
         ],
         states={
@@ -1978,6 +2013,8 @@ def build_application(token: str):
     )
 
     app.add_handler(conv)
+    # Отдельная группа: отвечает на кнопки, до которых диалог не дотянулся
+    app.add_handler(StaleCallbackHandler(conv, stale_button), group=1)
 
     # Утренний запрос курса — 8:00 по Москве
     if app.job_queue:

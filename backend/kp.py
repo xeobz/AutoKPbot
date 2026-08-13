@@ -22,6 +22,7 @@
 """
 import html
 import re
+import unicodedata
 
 # Лимит подписи к фото у Bot API — 1024 символа (Premium для ботов не существует).
 CAPTION_LIMIT = 1024
@@ -99,10 +100,38 @@ def car_title(d: dict) -> str:
     ).strip()
 
 
+# Слово названия: любые буквы (включая ë, š, ü), возможно через дефис
+_WORD_RE = re.compile(r"[^\W\d_]+(?:-[^\W\d_]+)*", re.UNICODE)
+
+
+def norm_brand(name: str) -> str:
+    """
+    Ключ марки: нижний регистр без диакритики, чтобы «Citroën» и «Citroen»,
+    «Škoda» и «Skoda» считались одной маркой.
+    """
+    folded = unicodedata.normalize("NFKD", (name or "").strip().lower())
+    return "".join(ch for ch in folded if not unicodedata.combining(ch))
+
+
+def brand_candidates(title: str) -> list[str]:
+    """
+    Возможные марки из названия — сначала два слова, потом одно:
+    «Alfa Romeo Giulia» → ['alfa romeo', 'alfa'], «Skoda Superb» → ['skoda superb', 'skoda'].
+    Так работают и составные марки (Alfa Romeo, Land Rover, Mercedes-Benz).
+    """
+    words = _WORD_RE.findall(title or "")
+    out: list[str] = []
+    if len(words) >= 2:
+        out.append(norm_brand(f"{words[0]} {words[1]}"))
+    if words:
+        out.append(norm_brand(words[0]))
+    return out
+
+
 def brand_of(title: str) -> str:
-    """Марка = первое слово названия: «Skoda Superb Combi 1.5…» → «skoda»."""
-    m = re.match(r"[A-Za-zА-Яа-яЁё\-]{2,}", (title or "").strip())
-    return m.group(0).lower() if m else ""
+    """Марка одним словом — используется там, где кандидатов перебирать негде."""
+    cands = brand_candidates(title)
+    return cands[-1] if cands else ""
 
 
 def _emoji_tag(custom_emoji_id: str | None, fallback: str) -> str:

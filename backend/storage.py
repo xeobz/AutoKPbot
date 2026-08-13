@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from kp import norm_brand
+
 DB_PATH = Path(__file__).parent / "bot_data.db"
 
 SCHEMA_VERSION = "2"
@@ -341,14 +343,14 @@ def set_brand_emoji(brand: str, custom_emoji_id: str, emoji: str, added_by: str 
             "VALUES (?, ?, ?, ?) ON CONFLICT(brand) DO UPDATE SET "
             "custom_emoji_id=excluded.custom_emoji_id, emoji=excluded.emoji, "
             "added_by=excluded.added_by",
-            (brand.strip().lower(), custom_emoji_id, emoji, added_by),
+            (norm_brand(brand), custom_emoji_id, emoji, added_by),
         )
 
 
 def get_brand_emoji(brand: str) -> dict | None:
     with _conn() as con:
         row = con.execute(
-            "SELECT * FROM brand_emoji WHERE brand=?", (brand.strip().lower(),)
+            "SELECT * FROM brand_emoji WHERE brand=?", (norm_brand(brand),)
         ).fetchone()
     return dict(row) if row else None
 
@@ -361,7 +363,7 @@ def get_all_brand_emoji() -> list[dict]:
 
 def remove_brand_emoji(brand: str) -> None:
     with _conn() as con:
-        con.execute("DELETE FROM brand_emoji WHERE brand=?", (brand.strip().lower(),))
+        con.execute("DELETE FROM brand_emoji WHERE brand=?", (norm_brand(brand),))
 
 
 # ── Pending requests ──────────────────────────────────────────────────────────

@@ -45,8 +45,13 @@ async def build_captions(d: dict, car_num: int | str, contact: str = CONTACT) ->
     options = await shorten_options(d.get("features", []), max_lines=MAX_OPTION_LINES)
     total   = total_rub(d)
 
-    brand = brand_of(d.get("title") or f"{d.get('make', '')} {d.get('model', '')}")
-    rec   = get_brand_emoji(brand) if brand else None
+    # Сначала пробуем составную марку («Alfa Romeo»), потом одно слово
+    title_for_brand = d.get("title") or f"{d.get('make', '')} {d.get('model', '')}"
+    rec = None
+    for cand in brand_candidates(title_for_brand):
+        rec = get_brand_emoji(cand)
+        if rec:
+            break
     fallback = (rec or {}).get("emoji") or "🚗"
     price_emoji_id = get_setting("price_emoji_id") or None
 
