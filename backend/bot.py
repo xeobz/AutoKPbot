@@ -1179,9 +1179,17 @@ async def kp_edit_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     kp = ctx.user_data.get("_kp_edit")
 
-    if action == "done" or not kp:
+    if action == "done":
         ctx.user_data.pop("_kp_edit", None)
         await query.edit_message_text("✅ КП готов.")
+        return WAIT_URL
+
+    if not kp:
+        # Набор фото хранится в памяти и не переживает перезапуск бота
+        await query.edit_message_text(
+            "⌛ Это КП уже не редактируется — бот перезапускался.\n"
+            "Откройте «📋 История» и отправьте КП заново."
+        )
         return WAIT_URL
 
     used    = kp["used_photos"]
@@ -1829,14 +1837,28 @@ def build_application(token: str):
     _text = filters.TEXT & ~filters.COMMAND & ~_KB_FILTER
 
     conv = ConversationHandler(
+        # ВАЖНО: всё, что пользователь может нажать «на холодную», обязано быть
+        # точкой входа. Состояния диалога живут в памяти и теряются при
+        # перезапуске бота (то есть при каждом деплое). Если кнопка описана
+        # только в fallbacks, после рестарта она молчит до /start.
         entry_points=[
             CommandHandler("start",    cmd_start),
             CommandHandler("pending",  cmd_pending),
             CommandHandler("settings", cmd_settings),
             CommandHandler("rates",    cmd_rates),
             CommandHandler("app",      cmd_app),
-            # Утренний запрос курса приходит вне диалога — кнопка должна работать всегда
-            CallbackQueryHandler(rates_start, pattern=r"^rates:"),
+            # Кнопки нижней клавиатуры
+            MessageHandler(filters.Regex(rf"^{re.escape(_BTN_HISTORY)}$"),  show_history),
+            MessageHandler(filters.Regex(rf"^{re.escape(_BTN_PENDING)}$"),  cmd_pending),
+            MessageHandler(filters.Regex(rf"^{re.escape(_BTN_SETTINGS)}$"), cmd_settings),
+            # Кнопки под сообщениями, которые могли прийти до перезапуска:
+            # утренний запрос курса, меню настроек, история, выбор фото —
+            # все они читают данные из базы, поэтому работают и без диалога
+            CallbackQueryHandler(rates_start,       pattern=r"^rates:"),
+            CallbackQueryHandler(settings_button,   pattern=r"^set:"),
+            CallbackQueryHandler(history_open_item, pattern=r"^hist:\d+$"),
+            CallbackQueryHandler(photo_choice_auto, pattern=r"^autokp:"),
+            CallbackQueryHandler(kp_edit_button,    pattern=r"^kpedit:"),
             MessageHandler(_link_filter, receive_url),
         ],
         states={
