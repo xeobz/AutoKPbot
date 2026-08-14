@@ -160,8 +160,8 @@ def build_kp_text(
     specs = build_specs_line(d)
     footer = PRICE_FOOTERS.get(direction, PRICE_FOOTERS["minsk"])
 
-    car_line = f"{_emoji_tag(brand_emoji_id, brand_emoji_fallback)} <b>{title}</b>"
-    price_line = f"{_emoji_tag(price_emoji_id, '💸')}<b>{fmt_price_rub(total_rub)}</b>"
+    car_line = f"{_emoji_tag(brand_emoji_id, brand_emoji_fallback)} {title}"
+    price_line = f"{_emoji_tag(price_emoji_id, '💸')}{fmt_price_rub(total_rub)}"
 
     head = ["ДОСТУПЕН В ЕВРОПЕ 🇪🇺", "", car_line]
     if specs:
@@ -171,7 +171,8 @@ def build_kp_text(
 
     def assemble(opts: list[str]) -> str:
         body = ["", "Комплектация:"] + [html.escape(o) for o in opts] if opts else []
-        return "\n".join(head + body + tail)
+        # Весь текст КП жирный — одной обёрткой, без вложенных тегов внутри
+        return "<b>" + "\n".join(head + body + tail) + "</b>"
 
     opts = list(options)
     text = assemble(opts)
