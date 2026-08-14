@@ -311,14 +311,20 @@ def _parse_html(html: str) -> dict:
 
 # ── Загрузка страницы браузером (nodriver) ───────────────────────────────────
 
-async def _fetch_html_async(url: str, warmup_url: str, blocked_markers: tuple[str, ...]) -> str:
+async def _fetch_html_async(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
+                            profile_dir: str | None = None) -> str:
     import asyncio
     import nodriver as uc
 
     import sys
     headless = sys.platform != "win32"
+    # user_data_dir задаём сами: профиль весит ~56 МБ, и если его создаст
+    # nodriver, каталог останется после жёсткого выхода процесса.
+    # sandbox=False обязателен, потому что сервис работает от root.
     browser = await uc.start(
         headless=headless,
+        sandbox=False,
+        user_data_dir=profile_dir,
         browser_args=["--lang=ru-RU", "--no-sandbox", "--disable-dev-shm-usage"],
     )
     try:
@@ -424,8 +430,47 @@ def _repair_non_utf8_sources(package: str = "nodriver") -> list[str]:
     return fixed
 
 
+def _temp_base() -> str | None:
+    """
+    Где держать временные файлы браузера.
+
+    На сервере /tmp смонтирован как tmpfs, то есть лежит в оперативной памяти,
+    а профиль Chrome весит около 56 МБ — несколько разборов подряд съедали бы
+    память машины. Поэтому на Linux уводим временные каталоги на диск.
+    """
+    import os
+    import sys
+
+    if sys.platform != "win32":
+        for candidate in ("/var/tmp", "/opt/autokpbot/tmp"):
+            if os.path.isdir(candidate) and os.access(candidate, os.W_OK):
+                return candidate
+    return None      # системный каталог по умолчанию
+
+
+def _sweep_stale_temp(base: str | None, max_age_sec: int = 3600) -> None:
+    """Подчищает каталоги от прошлых запусков, если процесс не успел прибраться."""
+    import shutil
+    import tempfile
+    import time
+    from pathlib import Path as _Path
+
+    root = _Path(base or tempfile.gettempdir())
+    now = time.time()
+    try:
+        entries = list(root.glob("autokp_scrape_*"))
+    except OSError:
+        return
+    for path in entries:
+        try:
+            if now - path.stat().st_mtime > max_age_sec:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            continue
+
+
 def _browser_worker(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
-                    out_path: str, err_path: str) -> None:
+                    out_path: str, err_path: str, profile_dir: str) -> None:
     """
     Тело отдельного процесса: поднимает браузер, сохраняет HTML в файл.
 
@@ -444,6 +489,13 @@ def _browser_worker(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
     for name in ("nodriver", "websockets", "uc", "asyncio"):
         _logging.getLogger(name).setLevel(_logging.CRITICAL)
 
+    # Своя группа процессов: если браузер зависнет, родитель прибьёт всю ветку
+    # целиком, иначе Chrome остаётся сиротой и продолжает держать память
+    try:
+        _os.setsid()
+    except (AttributeError, OSError):
+        pass
+
     code = 1
     try:
         # Библиотека может приехать с исходником, который Python не прочитает
@@ -458,7 +510,7 @@ def _browser_worker(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
         _asyncio.set_event_loop(loop)
 
         html = loop.run_until_complete(
-            _fetch_html_async(url, warmup_url, tuple(blocked_markers))
+            _fetch_html_async(url, warmup_url, tuple(blocked_markers), profile_dir)
         )
         _Path(out_path).write_text(html, encoding="utf-8")
         code = 0
@@ -494,15 +546,34 @@ async def fetch_html(
     import time
     from pathlib import Path
 
+    import os
+    import signal
+
     ctx = multiprocessing.get_context("spawn")
+    base = _temp_base()
+    _sweep_stale_temp(base)
     last_err: str = "не удалось загрузить страницу"
 
+    def _kill_tree(p) -> None:
+        """Прибиваем всю группу: иначе Chrome останется сиротой и займёт память."""
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except (AttributeError, ProcessLookupError, PermissionError, OSError):
+            pass
+        try:
+            p.kill()
+        except Exception:
+            pass
+
     for attempt in range(attempts):
-        tmp = Path(tempfile.mkdtemp(prefix="autokp_scrape_"))
+        # Каталогом владеет родитель: даже если дочерний процесс убит,
+        # профиль Chrome (около 56 МБ) удалится вместе с ним
+        tmp = Path(tempfile.mkdtemp(prefix="autokp_scrape_", dir=base))
         out, err = tmp / "page.html", tmp / "error.txt"
+        profile = tmp / "chrome-profile"
         proc = ctx.Process(
             target=_browser_worker,
-            args=(url, warmup_url, tuple(blocked_markers), str(out), str(err)),
+            args=(url, warmup_url, tuple(blocked_markers), str(out), str(err), str(profile)),
             daemon=True,
         )
         try:
@@ -512,7 +583,7 @@ async def fetch_html(
                 await asyncio.sleep(0.4)
 
             if proc.is_alive():
-                proc.kill()
+                _kill_tree(proc)
                 proc.join(5)
                 last_err = "сайт не ответил вовремя"
             elif out.exists():
@@ -525,7 +596,8 @@ async def fetch_html(
             last_err = str(e)
         finally:
             if proc.is_alive():
-                proc.kill()
+                _kill_tree(proc)
+                proc.join(3)
             shutil.rmtree(tmp, ignore_errors=True)
 
         if attempt < attempts - 1:
