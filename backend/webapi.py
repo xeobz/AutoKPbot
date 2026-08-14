@@ -632,6 +632,23 @@ async def lifespan(app: FastAPI):
         await _bot_instance.shutdown()
 
 
+class AppShellStatic(StaticFiles):
+    """
+    Статика мини-аппа с обязательной перепроверкой.
+
+    Без заголовка Cache-Control браузер (и особенно WebView телеграма)
+    решает срок жизни файла сам и может неделями отдавать старый calc.js —
+    пользователь после деплоя видит прежний интерфейс. no-cache не запрещает
+    кеш, а требует спросить сервер: если файл не менялся, ответ 304 и трафика
+    почти нет.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="AutoKP Mini App", lifespan=lifespan)
     app.add_middleware(
@@ -647,5 +664,5 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     if FRONTEND_DIR.exists():
-        app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+        app.mount("/", AppShellStatic(directory=str(FRONTEND_DIR), html=True), name="frontend")
     return app
