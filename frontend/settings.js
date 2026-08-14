@@ -1,10 +1,10 @@
 // Экран «Настройки» (только админ): разделы с полями, отдельный блок «Курс дня».
-import { api } from './api.js';
+import { api } from './api.js?v=2';
 import {
   h, frag, icon, toNum, toast,
   stateLoading, stateEmpty, stateError, errBox, keepFocus,
-} from './ui.js';
-import { haptic, mainButton } from './tg.js';
+} from './ui.js?v=2';
+import { haptic, mainButton } from './tg.js?v=2';
 
 let st = {
   data: null, loading: false, error: '',

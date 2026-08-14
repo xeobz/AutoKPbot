@@ -1,7 +1,7 @@
 // Сетка выбора фото. Порядок важен: первое выбранное фото несёт текст КП,
 // поэтому на выбранных рисуем порядковый номер.
-import { h } from './ui.js';
-import { haptic } from './tg.js';
+import { h } from './ui.js?v=2';
+import { haptic } from './tg.js?v=2';
 
 /** photos — все фото, selected — выбранные url по порядку, onChange(newSelected). */
 export function photoGrid({ photos, selected, onChange }) {

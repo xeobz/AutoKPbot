@@ -1,11 +1,11 @@
 // Точка входа: инициализация Telegram, профиль, нижние вкладки, монтирование экранов.
-import { api } from './api.js';
-import { initTg, mainButton, haptic } from './tg.js';
-import { h, stateLoading, stateError } from './ui.js';
-import { renderCalc } from './calc.js';
-import { renderHistory } from './history.js';
-import { renderSettings } from './settings.js';
-import { renderDraft } from './draft.js';
+import { api } from './api.js?v=2';
+import { initTg, mainButton, haptic } from './tg.js?v=2';
+import { h, stateLoading, stateError } from './ui.js?v=2';
+import { renderCalc } from './calc.js?v=2';
+import { renderHistory } from './history.js?v=2';
+import { renderSettings } from './settings.js?v=2';
+import { renderDraft } from './draft.js?v=2';
 
 const appEl = document.getElementById('app');
 const tabbarEl = document.getElementById('tabbar');
