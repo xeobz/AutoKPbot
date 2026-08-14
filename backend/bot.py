@@ -301,6 +301,9 @@ def _photo_choice_kb(draft_id: str) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(
         "⚡ Отправить с автоподбором", callback_data=f"autokp:{draft_id}"
     )])
+    rows.append([InlineKeyboardButton(
+        "📋 Без КП — только запись", callback_data=f"nokp:{draft_id}"
+    )])
     return InlineKeyboardMarkup(rows)
 
 
@@ -370,6 +373,19 @@ async def photo_choice_auto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
             ]]),
         )
         return KP_PHOTO_EDIT
+    return WAIT_URL
+
+
+async def photo_choice_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Кнопка «Без КП» — строка в таблице уже записана, текст клиенту не нужен."""
+    query = update.callback_query
+    await query.answer()
+    draft_id = query.data.split(":")[1]
+    close_draft(draft_id)
+    await query.edit_message_text(
+        "✅ Записано в таблицу, без КП.\n"
+        "Если понадобится — КП можно отправить позже из «📋 История».",
+    )
     return WAIT_URL
 
 
@@ -1893,6 +1909,7 @@ def build_application(token: str):
             CallbackQueryHandler(history_open_item,  pattern=r"^hist:\d+$"),
             CallbackQueryHandler(pending_pick,       pattern=r"^pending_pick:"),
             CallbackQueryHandler(photo_choice_auto,  pattern=r"^autokp:"),
+            CallbackQueryHandler(photo_choice_skip,  pattern=r"^nokp:"),
             CallbackQueryHandler(kp_edit_button,     pattern=r"^kpedit:"),
             MessageHandler(_link_filter, receive_url),
         ],
@@ -1978,6 +1995,7 @@ def build_application(token: str):
             ],
             PHOTO_CHOICE: [
                 CallbackQueryHandler(photo_choice_auto, pattern=r"^autokp:"),
+                CallbackQueryHandler(photo_choice_skip, pattern=r"^nokp:"),
             ],
             ADMIN_LIST: [
                 CallbackQueryHandler(admin_mgmt_button,   pattern=r"^adm:"),

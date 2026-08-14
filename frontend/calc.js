@@ -2,7 +2,7 @@
 // Заполненные шаги сворачиваются в компактную строку, следующий раскрывается.
 import { api } from './api.js';
 import {
-  h, frag, icon, fmtEur, fmtRub, fmtInt, toNum, toast,
+  h, frag, icon, switchToggle, fmtEur, fmtRub, fmtInt, toNum, toast,
   stateLoading, stateError, errBox, debounce, keepFocus,
 } from './ui.js';
 import { mainButton, haptic } from './tg.js';
@@ -68,6 +68,7 @@ function freshState() {
     open: 'link',
     details: false,          // раскрыты ли подробности расчёта
     confirming: false,       // показан ли экран подтверждения отправки
+    withKp: true,            // «с КП» — фото и текст клиенту, «без КП» — только запись
     submitting: false, done: null,
   };
 }
@@ -96,28 +97,32 @@ function build() {
   if (st.vat) parts.push(stepBuyback());
   if (st.buybackChosen) {
     if (fieldList().length) parts.push(stepFields());
-    parts.push(calcBlock(), photosBlock());
-    if (st.photos.length) parts.push(previewBlock());
+    parts.push(calcBlock());
+    if (st.withKp) {
+      parts.push(photosBlock());
+      if (st.photos.length) parts.push(previewBlock());
+    }
     if (st.confirming) parts.push(confirmBlock());
   }
   return frag(...parts);
 }
 
-/** Складной шаг: заголовок + сводка + тело. */
-function step({ key, num, title, summary, done, body }) {
+/** Складной шаг: заголовок + сводка + тело. aside — элемент справа от заголовка. */
+function step({ key, num, title, summary, done, body, aside }) {
   const open = st.open === key;
+  const head = h('button', {
+    class: 'step-head', type: 'button',
+    'aria-expanded': open ? 'true' : 'false',
+    onclick: () => { st.open = open ? null : key; render(); },
+  },
+    h('span', { class: 'step-num', text: String(num) }),
+    h('span', { class: 'step-title', text: title }),
+    !open && summary ? h('span', { class: 'step-summary', text: summary }) : null,
+    h('span', { class: 'step-chev' },
+      icon(open ? 'chevronDown' : (done ? 'pencil' : 'chevron'), 16)),
+  );
   return h('section', { class: 'card step' + (open ? ' open' : '') + (done ? ' done' : '') },
-    h('button', {
-      class: 'step-head', type: 'button',
-      'aria-expanded': open ? 'true' : 'false',
-      onclick: () => { st.open = open ? null : key; render(); },
-    },
-      h('span', { class: 'step-num', text: String(num) }),
-      h('span', { class: 'step-title', text: title }),
-      !open && summary ? h('span', { class: 'step-summary', text: summary }) : null,
-      h('span', { class: 'step-chev' },
-        icon(open ? 'chevronDown' : (done ? 'pencil' : 'chevron'), 16)),
-    ),
+    aside ? h('div', { class: 'step-row' }, head, aside) : head,
     open ? h('div', { class: 'step-body' }, body()) : null,
   );
 }
@@ -127,6 +132,18 @@ function stepLink() {
   return step({
     key: 'link', num: 1, title: 'Ссылка', done: !!st.car,
     summary: st.car ? st.car.title : '',
+    // Режим: с КП — фото и текст для клиента; без КП — только запись в таблицу
+    aside: switchToggle({
+      on: st.withKp,
+      labelOn: 'с КП',
+      labelOff: 'без КП',
+      onChange: (on) => {
+        st.withKp = on;
+        if (!on) { st.preview = null; st.previewError = ''; }
+        render();
+        if (on && st.photos.length) schedulePreview();
+      },
+    }),
     body: () => {
       if (st.parsing) {
         return h('div', {},
@@ -478,12 +495,17 @@ function confirmBlock() {
     ['Направление', dirLabel(st.direction)],
     ['Контрагент', st.counterparty.trim()],
     ['Выкуп', buybackSummary() || '—'],
-    ['Фото', `${st.photos.length} шт.`],
+    ...(st.withKp ? [['Фото', `${st.photos.length} шт.`]] : []),
     ['Под ключ', st.calc ? fmtRub(st.calc.total_rub) : '—'],
   ];
   return h('section', { class: 'card card-pad' },
-    h('h2', { class: 'card-title', text: 'Проверьте перед отправкой' }),
-    h('div', { class: 'hint', text: 'Запись уйдёт в таблицу, КП — в чат. Отменить отправку будет нельзя.' }),
+    h('h2', { class: 'card-title', text: st.withKp ? 'Проверьте перед отправкой' : 'Проверьте перед записью' }),
+    h('div', {
+      class: 'hint',
+      text: st.withKp
+        ? 'Запись уйдёт в таблицу, КП — в чат. Отменить отправку будет нельзя.'
+        : 'Запись уйдёт в таблицу. КП не формируется — отправить его можно позже из истории.',
+    }),
     h('ul', { class: 'confirm-list' },
       ...items.map(([k, v]) => h('li', {},
         h('span', { class: 'k', text: k }),
@@ -539,15 +561,18 @@ function previewBlock() {
 /* --- Готово --- */
 function doneScreen() {
   const d = st.done || {};
-  const failed = d.sent === false;
+  // КП не просили — отсутствие отправки это не ошибка
+  const noKp = d.withKp === false;
+  const failed = !noKp && d.sent === false;
   return h('section', { class: 'card card-pad center' },
     h('div', { class: 'done-mark' + (failed ? ' is-warn' : '') }, icon(failed ? 'alert' : 'check', 26)),
     h('h2', { class: 'car-title mt8', text: failed ? 'Записано, но КП не ушло' : 'Готово' }),
-    d.sent === false
+    failed
       ? h('div', { class: 'warn-box mt8', text: 'Запись сохранена, но КП не ушло в чат. Напишите боту /start и отправьте заново из истории.' })
-      : h('div', { class: 'hint', text: 'КП отправлен в чат' }),
+      : h('div', { class: 'hint', text: noKp ? 'Записано в таблицу, без КП' : 'КП отправлен в чат' }),
     h('div', { class: 'car-price', text: `Запись #${d.car_num ?? '—'}` }),
     Number.isFinite(Number(d.sheet_row)) ? h('div', { class: 'hint small', text: `Строка в таблице: ${d.sheet_row}` }) : null,
+    noKp ? h('div', { class: 'hint small mt8', text: 'КП можно отправить позже из истории.' }) : null,
   );
 }
 
@@ -593,6 +618,7 @@ async function recalcNow() {
 const schedulePreview = debounce(() => loadPreview(), 400);
 
 async function loadPreview() {
+  if (!st.withKp) return;
   if (!st.draftId || !st.direction || !st.vat || !st.photos.length) return;
   const seq = ++previewSeq;
   st.previewLoading = true;
@@ -613,7 +639,9 @@ async function loadPreview() {
 /* ---------- Главная кнопка ---------- */
 
 function isReady() {
-  return !!(st.draftId && st.direction && st.vat && st.counterparty.trim() && st.buybackChosen && st.photos.length);
+  // Фото нужны только когда готовим КП
+  const photosOk = !st.withKp || st.photos.length > 0;
+  return !!(st.draftId && st.direction && st.vat && st.counterparty.trim() && st.buybackChosen && photosOk);
 }
 
 function syncMainButton() {
@@ -624,7 +652,7 @@ function syncMainButton() {
   if (!isReady()) { mainButton.hide(); return; }
   if (st.confirming) {
     mainButton.set({
-      text: 'Подтвердить и отправить',
+      text: st.withKp ? 'Подтвердить и отправить' : 'Подтвердить и записать',
       onClick: doSubmit,
       enabled: !st.submitting,
       loading: st.submitting,
@@ -633,7 +661,7 @@ function syncMainButton() {
   }
   // Действие необратимое — сначала показываем сводку на проверку
   mainButton.set({
-    text: 'Записать и отправить КП',
+    text: st.withKp ? 'Записать и отправить КП' : 'Записать в таблицу',
     onClick: () => {
       st.confirming = true;
       render();
@@ -651,9 +679,10 @@ async function doSubmit() {
     const r = await api.submit({
       ...calcBody(),
       counterparty: st.counterparty.trim(),
-      photos: st.photos,
+      photos: st.withKp ? st.photos : [],
+      with_kp: st.withKp,
     });
-    st.done = r || {};
+    st.done = { ...(r || {}), withKp: st.withKp };
     st.confirming = false;
     haptic.ok();
   } catch (e) {

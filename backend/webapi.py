@@ -187,6 +187,7 @@ class PreviewReq(CalcReq):
 
 class SubmitReq(PreviewReq):
     counterparty: str = ""
+    with_kp: bool = True      # False — только запись в таблицу, без текста и фото
 
 
 class PhotosReq(BaseModel):
@@ -363,6 +364,7 @@ async def submit(req: SubmitReq, user: dict = Depends(current_user)):
     if not counterparty:
         raise HTTPException(400, "Укажите контрагента")
     d["counterparty"] = f"{counterparty}({user['name']})"
+    d["with_kp"] = req.with_kp
 
     car_num, sheet_row = await _write_row(d)
 
@@ -373,8 +375,9 @@ async def submit(req: SubmitReq, user: dict = Depends(current_user)):
     )
     close_draft(req.draft_id)
 
-    sent = await _send(rec["chat_id"], car_num, d, req.photos)
-    return {"car_num": car_num, "sheet_row": sheet_row, "sent": sent}
+    # Режим «без КП»: строка в таблице нужна, текст и фото — нет
+    sent = await _send(rec["chat_id"], car_num, d, req.photos) if req.with_kp else False
+    return {"car_num": car_num, "sheet_row": sheet_row, "sent": sent, "with_kp": req.with_kp}
 
 
 async def _send(chat_id: int, car_num, d: dict, photos: list[str] | None) -> bool:

@@ -45,6 +45,23 @@ const ICON_PATHS = {
   sticker: '<path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v6L13 20H6.5A2.5 2.5 0 0 1 4 17.5z"/><path d="M20 12.5h-4.5a2 2 0 0 0-2 2V20"/>',
 };
 
+/**
+ * Переключатель с подписью. Клик не всплывает наверх — иначе тумблер
+ * внутри заголовка шага сворачивал бы сам шаг.
+ */
+export function switchToggle({ on, labelOn, labelOff, onChange }) {
+  return h('button', {
+    class: 'switch' + (on ? ' is-on' : ''),
+    type: 'button',
+    role: 'switch',
+    'aria-checked': on ? 'true' : 'false',
+    onclick: (e) => { e.stopPropagation(); onChange(!on); },
+  },
+    h('span', { class: 'switch-text', text: on ? labelOn : labelOff }),
+    h('span', { class: 'switch-track' }, h('span', { class: 'switch-knob' })),
+  );
+}
+
 /** Инлайн-SVG иконка в цвете текста. size — сторона в px. */
 export function icon(name, size = 18, cls = '') {
   const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
