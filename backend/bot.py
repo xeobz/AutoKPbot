@@ -42,6 +42,8 @@ from telegram.ext import (
 
 from calc import (
     DIRECTION_LABELS,
+    vat_from_percent,
+    vat_percent,
     apply_buyback,
     buyback_label,
     buyback_options,
@@ -131,7 +133,8 @@ CONTACT  = "@Aleksandr_Montaro"
     BRAND_AWAIT_NAME,    # 25 — эмодзи марок: название марки
     BRAND_AWAIT_EMOJI,   # 26 — эмодзи марок: сам премиум-эмодзи
     PHOTO_CHOICE,        # 27 — выбрать фото в мини-аппе или автоподбором
-) = range(28)
+    ASK_VAT_MANUAL,      # 28 — НДС: свой процент
+) = range(29)
 
 # Адрес мини-аппа (https). Пусто — бот работает по-старому, без веба.
 WEB_APP_URL = os.getenv("WEB_APP_URL", "").rstrip("/")
@@ -140,6 +143,7 @@ VAT_OPTIONS = [
     ("🇩🇪 19% (Германия)", "1.19"),
     ("🇧🇾 17% (Беларусь)", "1.17"),
     ("🇧🇪 21% (Бельгия)",  "1.21"),
+    ("0% — без НДС",       "1.0"),
 ]
 BUYBACK_PCTS = list(range(5, 16))   # 5–15 %
 
@@ -577,10 +581,12 @@ async def receive_counterparty(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
 
     ctx.user_data["counterparty"] = f"{counterparty}({manager})"
 
-    kb = InlineKeyboardMarkup([
+    rows = [
         [InlineKeyboardButton(label, callback_data=f"vat:{val}")]
         for label, val in VAT_OPTIONS
-    ])
+    ]
+    rows.append([InlineKeyboardButton("✏️ Свой процент", callback_data="vat:custom")])
+    kb = InlineKeyboardMarkup(rows)
     await update.message.reply_text(
         f"👤 Контрагент: <b>{counterparty}({manager})</b>\n\n"
         "Выберите <b>НДС</b> страны продавца:",
@@ -592,21 +598,55 @@ async def receive_counterparty(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
 
 # ── Step 3: VAT ───────────────────────────────────────────────────────────────
 
+async def _after_vat(update_or_query, ctx: ContextTypes.DEFAULT_TYPE, vat: float) -> int:
+    """Ставим НДС и переходим к выкупу — общий хвост для кнопок и ручного ввода."""
+    ctx.user_data["vat"] = vat
+    h = ctx.user_data["price_eur"] / vat
+
+    text = (
+        f"✅ НДС: <b>{vat_percent(vat)}</b> → НЕТТО: <b>{fmt_eur(h)}</b>\n\n"
+        "Выберите <b>процент выкупа</b>:"
+    )
+    kb = _build_buyback_keyboard(h)
+    if hasattr(update_or_query, "edit_message_text"):
+        await update_or_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await update_or_query.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+    return ASK_BUYBACK
+
+
 async def receive_vat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    vat = float(query.data.split(":")[1])
-    ctx.user_data["vat"] = vat
+    choice = query.data.split(":")[1]
 
-    h  = ctx.user_data["price_eur"] / vat
-    kb = _build_buyback_keyboard(h)
-    await query.edit_message_text(
-        f"✅ НДС: <b>{vat}</b> → НЕТТО: <b>{fmt_eur(h)}</b>\n\n"
-        "Выберите <b>процент выкупа</b>:",
-        reply_markup=kb,
-        parse_mode="HTML",
-    )
-    return ASK_BUYBACK
+    if choice == "custom":
+        await query.edit_message_text(
+            "Введите <b>процент НДС</b> числом.\n"
+            "<i>Например: 23. Если НДС нет — 0.</i>",
+            parse_mode="HTML",
+        )
+        return ASK_VAT_MANUAL
+
+    return await _after_vat(query, ctx, float(choice))
+
+
+async def receive_vat_manual(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """ASK_VAT_MANUAL — свой процент НДС."""
+    raw = (update.message.text or "").strip().rstrip("%").strip()
+    val = _parse_number(raw)
+    if val is None or val < 0 or val > 100:
+        await update.message.reply_text("Введите процент от 0 до 100, например: 23")
+        return ASK_VAT_MANUAL
+
+    # Кто-то по привычке впишет коэффициент (1.19) — такого НДС не бывает,
+    # поэтому значения 1.01–1.5 с запятой понимаем как коэффициент
+    if 1 < val < 1.5 and ("." in raw or "," in raw):
+        vat = val
+    else:
+        vat = vat_from_percent(val)
+
+    return await _after_vat(update, ctx, round(vat, 4))
 
 
 # ── Step 4: buyback % ─────────────────────────────────────────────────────────
@@ -1931,6 +1971,9 @@ def build_application(token: str):
             ],
             ASK_VAT: [
                 CallbackQueryHandler(receive_vat, pattern=r"^vat:"),
+            ],
+            ASK_VAT_MANUAL: [
+                MessageHandler(_text, receive_vat_manual),
             ],
             ASK_BUYBACK: [
                 CallbackQueryHandler(receive_buyback, pattern=r"^buyback:"),

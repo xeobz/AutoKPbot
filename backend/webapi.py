@@ -237,6 +237,9 @@ def _apply_request(base: dict, req: CalcReq) -> dict:
     """Черновик + выбор менеджера → данные для расчёта."""
     if req.direction not in DIRECTIONS:
         raise HTTPException(400, f"Неизвестное направление: {req.direction}")
+    # 1.0 — без НДС, 2.0 — заведомо больше любой реальной ставки
+    if not (1.0 <= req.vat <= 2.0):
+        raise HTTPException(400, "НДС должен быть от 0% до 100%")
 
     tf = get_tariffs()
     r  = get_rates()

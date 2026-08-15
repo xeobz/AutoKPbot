@@ -20,7 +20,11 @@ const VATS = [
   { value: 1.19, label: '19%', ico: '🇩🇪', country: 'Германия' },
   { value: 1.17, label: '17%', ico: '🇧🇾', country: 'Беларусь' },
   { value: 1.21, label: '21%', ico: '🇧🇪', country: 'Бельгия' },
+  { value: 1.0,  label: '0%',  ico: '',    country: 'без НДС' },
 ];
+
+/** Коэффициент 1.19 → «19%». */
+const vatLabel = (v) => `${Number(((Number(v) - 1) * 100).toFixed(2))}%`;
 
 export const FIELD_LABELS = {
   customs_eur: 'Таможня РБ, €',
@@ -61,6 +65,7 @@ function freshState() {
     vat: null,
     buyback: { mode: 'pct', value: 10 }, buybackChosen: false,
     customOpen: false, customValue: '',
+    vatCustomOpen: false, vatCustomValue: '',
     fields: { customs_eur: '', util_rub: '', customs_tks_rub: '', evacuator_rub: '' },
     calc: null, calcLoading: false, calcError: '',
     photos: [],
@@ -280,23 +285,63 @@ function stepCounterparty() {
 /* --- 5. НДС --- */
 function stepVat() {
   const cur = VATS.find((v) => v.value === st.vat);
+  const isCustom = st.vat && !cur;
+
+  const pick = (value) => {
+    haptic.select();
+    st.vat = value;
+    st.vatCustomOpen = false;
+    st.open = 'buyback';
+    render();
+    recalcNow();
+  };
+
+  const applyCustom = () => {
+    const raw = String(st.vatCustomValue).replace('%', '').trim();
+    const num = toNum(raw);
+    if (num === null || num === undefined || num < 0 || num > 100) {
+      toast('Введите процент от 0 до 100', 'error');
+      return;
+    }
+    // Кто-то впишет коэффициент (1.19) — такого НДС не бывает
+    const value = (num > 1 && num < 1.5 && /[.,]/.test(raw)) ? num : 1 + num / 100;
+    pick(Number(value.toFixed(4)));
+  };
+
   return step({
     key: 'vat', num: 4, title: 'НДС', done: !!st.vat,
-    summary: cur ? `${cur.label} · ${cur.country}` : '',
-    body: () => h('div', { class: 'chips' },
-      ...VATS.map((v) => h('button', {
-        class: 'chip', type: 'button', 'aria-pressed': st.vat === v.value ? 'true' : 'false',
-        onclick: () => {
-          haptic.select();
-          st.vat = v.value;
-          st.open = 'buyback';
-          render();
-          recalcNow();
+    summary: cur ? `${cur.label} · ${cur.country}` : (isCustom ? vatLabel(st.vat) : ''),
+    body: () => h('div', {},
+      h('div', { class: 'chips' },
+        ...VATS.map((v) => h('button', {
+          class: 'chip', type: 'button', 'aria-pressed': st.vat === v.value ? 'true' : 'false',
+          onclick: () => pick(v.value),
         },
-      },
-        h('span', { class: 'chip-main', text: `${v.ico} ${v.label}` }),
-        h('span', { class: 'chip-sub', text: v.country }),
-      )),
+          h('span', { class: 'chip-main', text: v.ico ? `${v.ico} ${v.label}` : v.label }),
+          h('span', { class: 'chip-sub', text: v.country }),
+        )),
+        h('button', {
+          class: 'chip chip-wide', type: 'button',
+          'aria-pressed': (isCustom || st.vatCustomOpen) ? 'true' : 'false',
+          onclick: () => {
+            st.vatCustomOpen = !st.vatCustomOpen;
+            if (st.vatCustomOpen && isCustom) st.vatCustomValue = String(Number(((st.vat - 1) * 100).toFixed(2)));
+            render();
+          },
+        },
+          h('span', { class: 'chip-main', text: isCustom ? vatLabel(st.vat) : 'Свой процент' }),
+          h('span', { class: 'chip-sub', text: isCustom ? 'вручную' : 'ввести вручную' }),
+        ),
+      ),
+      st.vatCustomOpen ? h('div', { class: 'row mt8' },
+        h('input', {
+          class: 'input num grow', type: 'text', inputmode: 'decimal', placeholder: 'Процент НДС, например 23',
+          value: st.vatCustomValue, 'data-focus-key': 'custom-vat',
+          oninput: (e) => { st.vatCustomValue = e.target.value; },
+          onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); applyCustom(); } },
+        }),
+        h('button', { class: 'btn', type: 'button', text: 'Применить', onclick: applyCustom }),
+      ) : null,
     ),
   });
 }

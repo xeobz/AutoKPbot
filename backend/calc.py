@@ -66,6 +66,20 @@ def default_logistics(direction: str, tf: dict | None = None) -> float:
     }.get(direction, tf["logistics_minsk"])
 
 
+def vat_percent(vat: float) -> str:
+    """Коэффициент 1.19 → «19%», 1.0 → «0%». В интерфейсе процент понятнее."""
+    try:
+        pct = (float(vat) - 1) * 100
+    except (TypeError, ValueError):
+        return "—"
+    return f"{pct:g}%"
+
+
+def vat_from_percent(pct: float) -> float:
+    """Процент НДС → коэффициент: 23 → 1.23, 0 → 1.0 (без НДС)."""
+    return 1 + max(0.0, float(pct)) / 100
+
+
 def netto(d: dict) -> float:
     """Цена без НДС — от неё считается выкуп."""
     vat = d.get("vat", 1.19) or 1.19
@@ -207,7 +221,7 @@ def card_rows(d: dict) -> list[dict]:
         c = calc_v2(d)
         rows = [
             _row("💶 БРУТТО (F)",        fmt_eur(c["f"]),   group="Стоимость в евро"),
-            _row(f"📊 НДС {c['vat']} → НЕТТО", fmt_eur(c["g"])),
+            _row(f"📊 НДС {vat_percent(c['vat'])} → НЕТТО", fmt_eur(c["g"])),
             _row(f"🏦 Выкуп {pct} (J)",  fmt_eur(c["k"]),   role="key"),
             _row("📦 Логистика (I)",     fmt_eur(c["j"])),
             _row("📄 Инвойс (K)",        fmt_eur(c["l"])),
@@ -240,7 +254,7 @@ def card_rows(d: dict) -> list[dict]:
     c = calc_minsk(d)
     return [
         _row("💶 БРУТТО (G)",        fmt_eur(c["g"]),   group="Стоимость в евро"),
-        _row(f"📊 НДС {c['vat']} → НЕТТО", fmt_eur(c["h"])),
+        _row(f"📊 НДС {vat_percent(c['vat'])} → НЕТТО", fmt_eur(c["h"])),
         _row(f"🏦 Выкуп {pct} (K)",  fmt_eur(c["k"]),   role="key"),
         _row("📦 Логистика (J)",     fmt_eur(c["j"])),
         _row("📄 Инвойс (L)",        fmt_eur(c["l"])),
