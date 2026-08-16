@@ -12,8 +12,7 @@ from storage import get_brand_emoji, get_float, get_setting
 
 CONTACT = "@Aleksandr_Montaro"
 
-# Сколько опций максимум просим у ИИ — лишние всё равно срежет лимит подписи
-MAX_OPTION_LINES = 14
+# Опции берём все, что есть у машины: сколько поместится — решит лимит подписи
 
 log = logging.getLogger("autokp.kp")
 
@@ -57,7 +56,7 @@ async def build_captions(d: dict, car_num: int | str, contact: str = CONTACT) ->
     Текст КП. Возвращает (с премиум-эмодзи, без них) — второй нужен как запасной,
     если Telegram откажется принять custom emoji.
     """
-    options = await shorten_options(d.get("features", []), max_lines=MAX_OPTION_LINES)
+    options = await shorten_options(d.get("features", []))
     total   = total_rub(d)
 
     # Сначала пробуем составную марку («Alfa Romeo»), потом одно слово
