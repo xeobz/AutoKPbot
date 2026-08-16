@@ -367,11 +367,28 @@ def _warmup_url(url: str) -> str:
 
 # ── Публичная точка входа ────────────────────────────────────────────────────
 
+# Куски, по которым видно, что страница объявления доехала целиком
+READY_MARKERS = ("__NEXT_DATA__", "listingDetails")
+
+
 async def scrape_autoscout24(url: str) -> dict:
     """Загружает и разбирает объявление autoscout24 (ссылка любого домена)."""
     html = await fetch_html(
         url,
         warmup_url=_warmup_url(url),
         blocked_markers=BLOCKED_MARKERS,
+        ready_markers=READY_MARKERS,
     )
-    return parse_autoscout24_html(html)
+    data = parse_autoscout24_html(html)
+
+    # Цены нет — страница пришла неполной, пробуем браузером
+    if not data.get("price_eur"):
+        html = await fetch_html(
+            url,
+            warmup_url=_warmup_url(url),
+            blocked_markers=BLOCKED_MARKERS,
+            ready_markers=READY_MARKERS,
+            prefer_http=False,
+        )
+        data = parse_autoscout24_html(html)
+    return data

@@ -311,8 +311,19 @@ def _parse_html(html: str) -> dict:
 
 # ── Загрузка страницы браузером (nodriver) ───────────────────────────────────
 
+def content_ok(html: str, ready_markers: tuple[str, ...],
+               blocked_markers: tuple[str, ...]) -> bool:
+    """Страница пришла целиком: нужные куски на месте, следов блокировки нет."""
+    if not html:
+        return False
+    if any(b in html for b in blocked_markers):
+        return False
+    return all(m in html for m in ready_markers) if ready_markers else True
+
+
 async def _fetch_html_async(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
-                            profile_dir: str | None = None) -> str:
+                            profile_dir: str | None = None,
+                            ready_markers: tuple[str, ...] = ()) -> str:
     import asyncio
     import nodriver as uc
 
@@ -327,22 +338,30 @@ async def _fetch_html_async(url: str, warmup_url: str, blocked_markers: tuple[st
         user_data_dir=profile_dir,
         browser_args=["--lang=ru-RU", "--no-sandbox", "--disable-dev-shm-usage"],
     )
+    import time as _time
+
     try:
         # Прогрев: сначала главная — Cloudflare ставит куки и решает JS-челлендж,
         # заодно фиксируется русская локаль сайта.
-        await browser.get(warmup_url)
-        await asyncio.sleep(5)
+        if warmup_url:
+            await browser.get(warmup_url)
+            await asyncio.sleep(1.5)
 
         html = ""
-        for attempt in range(3):
+        for attempt in range(2):
             page = await browser.get(url)
-            wait = 6 + attempt * 4       # 6s → 10s → 14s
-            await asyncio.sleep(wait)
-            html = await page.get_content()
-            if not any(marker in html for marker in blocked_markers):
+            # Ждём появления данных, а не «на всякий случай»: страница обычно
+            # готова за секунду-две, фиксированная пауза просто тратила время
+            deadline = _time.monotonic() + 25
+            while _time.monotonic() < deadline:
+                html = await page.get_content()
+                if content_ok(html, ready_markers, blocked_markers):
+                    break
+                await asyncio.sleep(0.4)
+            if content_ok(html, ready_markers, blocked_markers):
                 break
-            if attempt < 2:
-                await asyncio.sleep(5)   # пауза перед следующей попыткой
+            if attempt == 0:
+                await asyncio.sleep(3)   # пауза перед второй попыткой
     finally:
         browser.stop()
 
@@ -470,7 +489,8 @@ def _sweep_stale_temp(base: str | None, max_age_sec: int = 3600) -> None:
 
 
 def _browser_worker(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
-                    out_path: str, err_path: str, profile_dir: str) -> None:
+                    out_path: str, err_path: str, profile_dir: str,
+                    ready_markers: tuple[str, ...] = ()) -> None:
     """
     Тело отдельного процесса: поднимает браузер, сохраняет HTML в файл.
 
@@ -510,7 +530,8 @@ def _browser_worker(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
         _asyncio.set_event_loop(loop)
 
         html = loop.run_until_complete(
-            _fetch_html_async(url, warmup_url, tuple(blocked_markers), profile_dir)
+            _fetch_html_async(url, warmup_url, tuple(blocked_markers), profile_dir,
+                              tuple(ready_markers))
         )
         _Path(out_path).write_text(html, encoding="utf-8")
         code = 0
@@ -531,13 +552,17 @@ async def fetch_html(
     url: str,
     warmup_url: str = "https://www.mobile.de/ru/",
     blocked_markers: tuple[str, ...] = ("Access denied", "Zugriff verweigert"),
-    attempts: int = 3,
+    attempts: int = 2,
     timeout: int = FETCH_TIMEOUT,
+    ready_markers: tuple[str, ...] = (),
+    prefer_http: bool = True,
 ) -> str:
     """
-    Забирает HTML страницы браузером в отдельном процессе.
-    До `attempts` попыток, каждая — свежий браузер: Cloudflare часто
-    пропускает со второго раза. Зависший браузер убивается по таймауту.
+    Забирает HTML страницы.
+
+    Сначала пробуем обычный HTTP-запрос — это полсекунды против десятков
+    секунд у браузера. Если сайт ответил заглушкой или данных в ответе нет,
+    поднимаем настоящий браузер в отдельном процессе (до `attempts` попыток).
     """
     import asyncio
     import multiprocessing
@@ -548,6 +573,11 @@ async def fetch_html(
 
     import os
     import signal
+
+    if prefer_http:
+        html = await fetch_html_fast(url, referer=warmup_url)
+        if content_ok(html, ready_markers, blocked_markers):
+            return html
 
     ctx = multiprocessing.get_context("spawn")
     base = _temp_base()
@@ -573,7 +603,8 @@ async def fetch_html(
         profile = tmp / "chrome-profile"
         proc = ctx.Process(
             target=_browser_worker,
-            args=(url, warmup_url, tuple(blocked_markers), str(out), str(err), str(profile)),
+            args=(url, warmup_url, tuple(blocked_markers), str(out), str(err),
+                  str(profile), tuple(ready_markers)),
             daemon=True,
         )
         try:
@@ -608,6 +639,39 @@ async def fetch_html(
 
 # ── httpx-фолбэк (почти всегда блокируется, оставлен как страховка) ──────────
 
+_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9,de;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+
+async def fetch_html_fast(url: str, referer: str = "") -> str:
+    """
+    Обычный HTTP-запрос без браузера — примерно полсекунды вместо десятков.
+    Возвращает пустую строку, если не вышло: решение о пригодности
+    принимает вызывающий по content_ok().
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(headers=_HTTP_HEADERS, follow_redirects=True,
+                                     timeout=20) as client:
+            if referer:
+                client.headers["Referer"] = referer
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return ""
+            return resp.text
+    except Exception:
+        return ""
+
+
 async def _scrape_with_httpx(url: str) -> dict:
     import httpx
 
@@ -634,15 +698,21 @@ async def _scrape_with_httpx(url: str) -> dict:
 
 # ── Публичные точки входа ────────────────────────────────────────────────────
 
+# Куски, по которым видно, что страница объявления доехала целиком
+MOBILE_DE_READY = ("self.__next_f", "classistatic.de")
+
+
 async def scrape_mobile_de(url: str) -> dict:
     """Загружает и разбирает объявление mobile.de (ссылка любой локали)."""
     url = normalise_mobile_de(url)
-    try:
-        html = await fetch_html(url)
-    except Exception:
-        # последняя попытка — обычный httpx
-        return await _scrape_with_httpx(url)
-    return _parse_html(html)
+    html = await fetch_html(url, ready_markers=MOBILE_DE_READY)
+    data = _parse_html(html)
+
+    # Цены нет — значит пришла не та страница; пробуем ещё раз браузером
+    if not data.get("price_eur"):
+        html = await fetch_html(url, ready_markers=MOBILE_DE_READY, prefer_http=False)
+        data = _parse_html(html)
+    return data
 
 
 async def scrape(url: str) -> dict:
