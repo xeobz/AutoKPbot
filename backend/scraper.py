@@ -242,7 +242,20 @@ def _extract_all_images_flat(rsc: str) -> list[str]:
 
 
 def _extract_features(rsc: str) -> list[str]:
-    return list(dict.fromkeys(_FEAT_RE.findall(rsc)))
+    """
+    Комплектация машины из чек-листа объявления.
+
+    Той же разметкой на странице свёрстан блок «Дополнительные услуги» дилера
+    (тест-драйв, шиномонтаж, лизинг). Его пункты отличаются классом
+    listItemReverse — иначе «Окрасочный цех» уезжает в КП как опция.
+    """
+    names: list[str] = []
+    for m in _FEAT_RE.finditer(rsc):
+        class_attr = rsc[m.end() : m.end() + 90]     # хвост className после «CheckList»
+        if "listItemReverse" in class_attr:
+            continue
+        names.append(m.group(1))
+    return list(dict.fromkeys(names))
 
 
 def _extract_attributes(rsc: str) -> dict:
