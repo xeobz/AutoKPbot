@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 
 import httpx
 
@@ -114,7 +115,10 @@ _SYSTEM_PROMPT = f"""Ты извлекаешь комплектацию авто
     сохраняй в привычном виде.
 12. Переводи полностью. В строке не должно остаться немецких, английских
     или голландских слов — кроме фирменных названий из пункта 8 и
-    обозначений из пункта 11. «Shadow-Line Hochglanz» → «глянцевая отделка
+    обозначений из пункта 11. Служебные слова переводи даже внутри
+    фирменного названия: «Night-Paket II» → «Night пакет II»,
+    «SUPERIOR Line Interieur» → «SUPERIOR Line интерьер»,
+    «GUARD 360° Fahrzeugschutz» → «GUARD 360° защита автомобиля». «Shadow-Line Hochglanz» → «глянцевая отделка
     Shadow Line», «Doppelspeiche Bicolor Schwarzgrau» → «двухцветные
     черно-серые диски», «Durchladeeinrichtung» → «люк в спинке заднего
     сиденья».
@@ -332,22 +336,56 @@ def _sources(d: dict) -> tuple[list[str], str]:
     return features, description
 
 
-_MERGE_PROMPT = """Тебе дают готовый список комплектации автомобиля для
+_MERGE_PROMPT = f"""Тебе дают готовый список комплектации автомобиля для
 коммерческого предложения. В нём есть пары строк про одно и то же: они
-пришли из разных мест объявления и написаны разными словами. Например:
-«Обогрев лобового стекла» и «Ветровое стекло с подогревом», «Руль
-с подогревом» и «Подогрев рулевого колеса», «Люк в крыше» и «Сдвижной люк».
+пришли из разных мест объявления и написаны разными словами.
 
-Верни тот же список без повторов: из каждой такой пары оставь ОДНУ строку —
-ту, что понятнее покупателю. Если в паре одна строка с фирменным названием
-(KEYLESS-GO, MULTIBEAM LED, Burmester, MBUX, DISTRONIC), оставляй её:
-для покупателя это признак дорогой комплектации.
-Все остальные строки верни слово в слово.
+Найди такие пары и верни их, по одной паре в строке, через {SEP}:
 
-Ничего не добавляй, не переписывай и не сокращай. Разные опции похожими
-не считай: «Спортивный пакет» и «Спортивная подвеска», «Подогрев сидений»
-и «Вентиляция сидений» — разные строки, обе нужны.
-Только строки списка, по одной в строке, без нумерации и пояснений."""
+лишняя строка{SEP}строка про то же самое
+
+Обе части — строки из присланного списка, слово в слово. Примеры пар:
+«Обогрев лобового стекла{SEP}Ветровое стекло с подогревом»,
+«Руль с подогревом{SEP}Подогрев рулевого колеса»,
+«Люк в крыше{SEP}Сдвижной люк».
+
+Разные опции парой не считай: «Спортивный пакет» и «Спортивная подвеска»,
+«Подогрев сидений» и «Вентиляция сидений» — это разное, пары тут нет.
+Если повторов нет, верни пустой ответ. Никаких пояснений и нумерации."""
+
+_LATIN_RE = re.compile(r"[A-Za-z][A-Za-z\-]{2,}")
+_CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+
+
+def _brand_tokens(text: str) -> set[str]:
+    """
+    Фирменные названия строки: KEYLESS-GO, Burmester, Nappa, MULTIBEAM.
+
+    КАПС считаем всегда, слово с большой буквы — только если оно не первое:
+    иначе «Electric heated rear seats» сойдёт за фирменное название, хотя это
+    просто непереведённая строка, которую как раз и надо выбросить.
+    """
+    out: set[str] = set()
+    for m in _LATIN_RE.finditer(text):
+        word = m.group(0)
+        if word.isupper() or (word[0].isupper() and text[: m.start()].strip()):
+            out.add(word.lower())
+    return out
+
+
+def _same_thing(a: str, b: str) -> bool:
+    """
+    Похожи ли строки настолько, чтобы считать их парой повторов.
+
+    Модель охотно предлагает в пару что попало, поэтому проверяем сами:
+    у настоящей пары есть общее слово («Обогрев лобового стекла» и «Ветровое
+    стекло с подогревом» — «стекл»). Исключение — непереведённый остаток
+    вроде «Electric heated rear seats»: с русской строкой он не пересечётся
+    ни одним словом, но это тот же пункт.
+    """
+    if _key_words(a) & _key_words(b):
+        return True
+    return not _CYRILLIC_RE.search(a) or not _CYRILLIC_RE.search(b)
 
 
 async def _merge_synonyms(options: list[str], api_key: str) -> list[str]:
@@ -355,9 +393,10 @@ async def _merge_synonyms(options: list[str], api_key: str) -> list[str]:
     Убирает пары про одно и то же, пришедшие из чек-листа и из описания.
 
     Сверять их кодом бесполезно: «Обогрев лобового стекла» и «Ветровое стекло
-    с подогревом» не пересекаются ни одним словом. Поэтому спрашиваем модель,
-    но принимаем только те строки, которые уже были в списке, — так этот
-    заход может лишь удалять, а дописать что-то от себя не может.
+    с подогревом» не пересекаются ни одним словом. Поэтому пары ищет модель,
+    а решает код: обе строки должны быть из списка, и вместе со строкой не
+    должно пропасть фирменное название. Если его теряет одна сторона — режем
+    другую, если обе — пару пропускаем.
     """
     if len(options) < 12:
         return options
@@ -367,19 +406,39 @@ async def _merge_synonyms(options: list[str], api_key: str) -> list[str]:
         return options
 
     allowed = {_norm(o): o for o in options}
-    kept: list[str] = []
-    seen: set[str] = set()
-    for line in answer.splitlines():
-        key = _norm(_clean_name(line))
-        if key in allowed and key not in seen:
-            seen.add(key)
-            kept.append(allowed[key])
+    limit = max(1, round(len(options) * 0.25))     # больше четверти не режем
+    dropped: set[str] = set()
+    survivors: set[str] = set()
 
-    if len(kept) < len(options) * 0.6:      # порезала слишком много — не верим
-        log.warning("Склейка повторов вернула %s строк из %s — оставляю как было",
-                    len(kept), len(options))
-        return options
-    return kept
+    for line in answer.splitlines():
+        extra, sep, stays = line.partition(SEP)
+        if not sep:
+            continue
+        drop_key = _norm(_clean_name(extra))
+        keep_key = _norm(_clean_name(stays))
+        if drop_key not in allowed or keep_key not in allowed or drop_key == keep_key:
+            continue
+        if not _same_thing(allowed[drop_key], allowed[keep_key]):
+            continue
+
+        drop_brands = _brand_tokens(allowed[drop_key])
+        keep_brands = _brand_tokens(allowed[keep_key])
+        if drop_brands - keep_brands:               # выбросили бы KEYLESS-GO
+            if keep_brands - drop_brands:
+                continue                            # обе стороны с названиями
+            drop_key, keep_key = keep_key, drop_key
+
+        # Цепочки А→Б и Б→В унесли бы обе строки с фирменным словом
+        if drop_key in dropped or keep_key in dropped or drop_key in survivors:
+            continue
+        dropped.add(drop_key)
+        survivors.add(keep_key)
+        if len(dropped) >= limit:
+            log.warning("Склейка повторов предложила слишком много — обрезал на %s",
+                        limit)
+            break
+
+    return [o for o in options if _norm(o) not in dropped]
 
 
 async def _ask(system: str, user: str, api_key: str, reasoning: int = 1024) -> str:
@@ -389,7 +448,9 @@ async def _ask(system: str, user: str, api_key: str, reasoning: int = 1024) -> s
     """
     for attempt in (1, 2):
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
+            # Живой ответ приходит за 10-25 секунд; минуты — это уже зависший
+            # провайдер, и ждать его дольше, чем менеджер готов ждать КП, незачем
+            async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
                     OPENROUTER_URL,
                     headers={
@@ -413,7 +474,10 @@ async def _ask(system: str, user: str, api_key: str, reasoning: int = 1024) -> s
                     },
                 )
                 resp.raise_for_status()
-                answer = resp.json()["choices"][0]["message"]["content"].strip()
+                # content бывает null: провайдер отдал одни рассуждения
+                # или срезал ответ фильтром — это не ошибка, а повод повторить
+                choices = resp.json().get("choices") or [{}]
+                answer = ((choices[0].get("message") or {}).get("content") or "").strip()
             if answer:
                 return answer
             log.warning("ИИ вернул пустой ответ (попытка %s из 2)", attempt)
@@ -450,6 +514,7 @@ async def build_options(d: dict) -> list[str]:
         parts.append("Описание продавца:\n" + description)
     user_prompt = "\n\n".join(parts)
 
+    started = time.monotonic()
     answer = await _ask(_SYSTEM_PROMPT, user_prompt, api_key)
     if not answer:
         log.error("Комплектация собрана без ИИ: в КП уйдёт список оборудования как есть")
@@ -464,5 +529,12 @@ async def build_options(d: dict) -> list[str]:
         return features
 
     options = _add_missing(options, features, quotes)
-    options = await _merge_synonyms(options, api_key)
+    # Склейка повторов — необязательная косметика. Если первый заход и так
+    # тянулся, второго менеджер ждать не должен: КП уйдёт с парой повторов,
+    # но сейчас, а не через четыре минуты.
+    if time.monotonic() - started < 40:
+        options = await _merge_synonyms(options, api_key)
+    else:
+        log.warning("Разбор занял %.0fс — склейку повторов пропускаю",
+                    time.monotonic() - started)
     return sorted(options, key=_sort_key)
