@@ -150,6 +150,8 @@ def build_kp_text(
     brand_emoji_id: str | None = None,
     brand_emoji_fallback: str = "🚗",
     price_emoji_id: str | None = None,
+    header_emoji_id: str | None = None,
+    header_emoji_fallback: str = "🇪🇺",
 ) -> str:
     """
     Собирает КП и укладывает его в лимит подписи: при нехватке места
@@ -163,7 +165,8 @@ def build_kp_text(
     car_line = f"{_emoji_tag(brand_emoji_id, brand_emoji_fallback)} {title}"
     price_line = f"{_emoji_tag(price_emoji_id, '💸')}{fmt_price_rub(total_rub)}"
 
-    head = ["ДОСТУПЕН В ЕВРОПЕ 🇪🇺", "", car_line]
+    header = f"ДОСТУПЕН В ЕВРОПЕ {_emoji_tag(header_emoji_id, header_emoji_fallback)}"
+    head = [header, "", car_line]
     if specs:
         head += ["", specs]
 

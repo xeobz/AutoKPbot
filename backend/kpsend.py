@@ -67,16 +67,22 @@ async def build_captions(d: dict, car_num: int | str, contact: str = CONTACT) ->
         if rec:
             break
     fallback = (rec or {}).get("emoji") or "🚗"
-    price_emoji_id = get_setting("price_emoji_id") or None
+    price_emoji_id  = get_setting("price_emoji_id") or None
+    header_emoji_id = get_setting("header_emoji_id") or None
+    header_fallback = get_setting("header_emoji") or "🇪🇺"
 
     with_emoji = build_kp_text(
         d, total, options, car_num, contact,
         brand_emoji_id=(rec or {}).get("custom_emoji_id"),
         brand_emoji_fallback=fallback,
         price_emoji_id=price_emoji_id,
+        header_emoji_id=header_emoji_id,
+        header_emoji_fallback=header_fallback,
     )
     plain = build_kp_text(
-        d, total, options, car_num, contact, brand_emoji_fallback=fallback
+        d, total, options, car_num, contact,
+        brand_emoji_fallback=fallback,
+        header_emoji_fallback=header_fallback,
     )
     return with_emoji, plain
 

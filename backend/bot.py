@@ -1642,11 +1642,14 @@ async def _show_brand_list(query_or_message, ctx: ContextTypes.DEFAULT_TYPE) -> 
     else:
         lines.append("<i>Пока ничего не добавлено.</i>")
 
+    header_id = get_setting("header_emoji_id")
     lines.append(f"\n💸 Эмодзи у цены: <b>{'задан' if price_id else 'обычный 💸'}</b>")
+    lines.append(f"🇪🇺 Эмодзи заголовка: <b>{'задан' if header_id else 'обычный 🇪🇺'}</b>")
 
-    rows.append([InlineKeyboardButton("➕ Добавить марку", callback_data="brand:add")])
-    rows.append([InlineKeyboardButton("💸 Эмодзи цены",    callback_data="brand:price")])
-    rows.append([InlineKeyboardButton("◀️ Назад",          callback_data="brand:back")])
+    rows.append([InlineKeyboardButton("➕ Добавить марку",   callback_data="brand:add")])
+    rows.append([InlineKeyboardButton("💸 Эмодзи цены",      callback_data="brand:price")])
+    rows.append([InlineKeyboardButton("🇪🇺 Эмодзи заголовка", callback_data="brand:header")])
+    rows.append([InlineKeyboardButton("◀️ Назад",            callback_data="brand:back")])
 
     await _reply(query_or_message, "\n".join(lines), InlineKeyboardMarkup(rows))
     return SETTINGS_MENU
@@ -1663,6 +1666,16 @@ async def brand_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if action[1] == "del":
         remove_brand_emoji(action[2])
         return await _show_brand_list(query, ctx)
+
+    if action[1] == "header":
+        ctx.user_data["_brand_target"] = "_header"
+        await query.edit_message_text(
+            "🇪🇺 Пришлите <b>премиум-эмодзи</b> для первой строки КП — "
+            "он встанет после «ДОСТУПЕН В ЕВРОПЕ».\n\n"
+            "<i>Просто отправьте его сообщением — бот запомнит.</i>",
+            parse_mode="HTML",
+        )
+        return BRAND_AWAIT_EMOJI
 
     if action[1] == "price":
         ctx.user_data["_brand_target"] = "_price"
@@ -1731,6 +1744,10 @@ async def brand_receive_emoji(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         set_setting("price_emoji_id", emoji_id)
         set_setting("price_emoji", char)
         await update.message.reply_text(f"✅ Эмодзи цены сохранён: {char}")
+    elif target == "_header":
+        set_setting("header_emoji_id", emoji_id)
+        set_setting("header_emoji", char)
+        await update.message.reply_text(f"✅ Эмодзи заголовка сохранён: {char}")
     else:
         set_brand_emoji(target, emoji_id, char, user.first_name or "")
         await update.message.reply_text(
