@@ -76,6 +76,35 @@ def _is_low_value(text: str) -> bool:
     return any(b in low for b in _LOW_VALUE)
 
 
+def _stem(word: str) -> str:
+    """Грубая основа слова: «руля» и «руль» → «рул», «сидений» и «сиденья» → «сид»."""
+    return word[:4].rstrip("аеёиоуыэюяьъй")
+
+
+def _words(text: str) -> list[str]:
+    return [w for w in re.findall(r"[^\W\d_]+", text.lower(), re.UNICODE) if len(w) >= 4]
+
+
+def _keep_only_real(lines: list[str], source: list[str]) -> list[str]:
+    """
+    Оставляет строки, которые действительно опираются на список опций.
+
+    Модель охотно дописывает «Камеры кругового обзора» или «Полный привод»,
+    даже если их нет в объявлении. В КП это обещание клиенту того, чего у
+    машины нет, поэтому такие строки выбрасываем.
+    """
+    pool = {_stem(w) for opt in source for w in _words(opt)}
+    kept: list[str] = []
+    for line in lines:
+        words = _words(line)
+        if not words:                      # строка из коротких слов — доверяем
+            kept.append(line)
+            continue
+        if all(_stem(w) in pool for w in words):
+            kept.append(line)
+    return kept
+
+
 def _prepare(features: list[str]) -> list[str]:
     """Чистим дубли и услуги дилера, базовое опускаем в конец."""
     seen: set[str] = set()
@@ -148,6 +177,9 @@ async def shorten_options(features: list[str], max_lines: int | None = None) -> 
         line = re.sub(r"\*\*|__", "", line)
         if line and line.lower() not in (l.lower() for l in lines):
             lines.append(line)
+
+    # Выбрасываем то, чего в объявлении не было
+    lines = _keep_only_real(lines, prepared)
 
     # Ответ невнятный — доверяем своей подготовке
     if len(lines) < 5:

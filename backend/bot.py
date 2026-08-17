@@ -69,6 +69,7 @@ from storage import (
     get_all_brand_emoji,
     get_brand_emoji,
     get_float,
+    get_optional,
     get_history_by_id,
     get_history_for_user,
     get_pending_by_id,
@@ -1624,7 +1625,7 @@ async def rates_receive_rub(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
 
 async def _show_brand_list(query_or_message, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     brands = get_all_brand_emoji()
-    price_id = get_setting("price_emoji_id")
+    price_id = get_optional("price_emoji_id")
 
     lines = [
         "😀 <b>Эмодзи марок</b>\n",
@@ -1642,7 +1643,7 @@ async def _show_brand_list(query_or_message, ctx: ContextTypes.DEFAULT_TYPE) -> 
     else:
         lines.append("<i>Пока ничего не добавлено.</i>")
 
-    header_id = get_setting("header_emoji_id")
+    header_id = get_optional("header_emoji_id")
     lines.append(f"\n💸 Эмодзи у цены: <b>{'задан' if price_id else 'обычный 💸'}</b>")
     lines.append(f"🇪🇺 Эмодзи заголовка: <b>{'задан' if header_id else 'обычный 🇪🇺'}</b>")
 

@@ -222,6 +222,18 @@ def get_setting(key: str) -> str:
     return row["value"] if row else _DEFAULTS.get(key, "0")
 
 
+def get_optional(key: str) -> str | None:
+    """
+    Значение настройки или None, если её не задавали.
+
+    get_setting для незнакомого ключа отдаёт строку «0» (удобно для чисел),
+    но для текстовых настроек вроде эмодзи это мусор, который подставился бы
+    в КП вместо символа.
+    """
+    value = get_setting(key)
+    return value if value and value != "0" else None
+
+
 def set_setting(key: str, value: str) -> None:
     with _conn() as con:
         con.execute(

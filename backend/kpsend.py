@@ -8,7 +8,7 @@ from telegram import InputMediaPhoto
 from ai import shorten_options
 from calc import total_rub
 from kp import brand_candidates, build_kp_text
-from storage import get_brand_emoji, get_float, get_setting
+from storage import get_brand_emoji, get_float, get_optional
 
 CONTACT = "@Aleksandr_Montaro"
 
@@ -67,9 +67,9 @@ async def build_captions(d: dict, car_num: int | str, contact: str = CONTACT) ->
         if rec:
             break
     fallback = (rec or {}).get("emoji") or "🚗"
-    price_emoji_id  = get_setting("price_emoji_id") or None
-    header_emoji_id = get_setting("header_emoji_id") or None
-    header_fallback = get_setting("header_emoji") or "🇪🇺"
+    price_emoji_id  = get_optional("price_emoji_id")
+    header_emoji_id = get_optional("header_emoji_id")
+    header_fallback = get_optional("header_emoji") or "🇪🇺"
 
     with_emoji = build_kp_text(
         d, total, options, car_num, contact,
