@@ -12,16 +12,20 @@
 выбрасываются. Обещать клиенту опцию, которой у машины нет, дороже, чем
 потерять строчку.
 """
+import asyncio
+import logging
 import os
 import re
 
 import httpx
 
+log = logging.getLogger("autokp.ai")
+
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Модель должна читать описание продавца на немецком и переводить его точно.
-# Дешёвые модели описание попросту игнорируют — проверено на живых объявлениях.
-# Сменить можно секретом AI_MODEL, не трогая код.
-MODEL = os.getenv("AI_MODEL") or "anthropic/claude-sonnet-4.5"
+# gpt-4o-mini и gpt-4.1-mini описание попросту игнорируют — проверено на живых
+# объявлениях. Сменить можно секретом AI_MODEL, не трогая код.
+MODEL = os.getenv("AI_MODEL") or "google/gemini-2.5-flash"
 
 # Маркер списка в начале строки: «- », «* », «1. ». Цифры в начале названия
 # («19" диски», «2-зонный климат») трогать нельзя, поэтому не strip по символам.
@@ -63,6 +67,15 @@ _SYSTEM_PROMPT = f"""Ты извлекаешь комплектацию авто
 и переводишь её на русский для публикации в Telegram. Объявление приходит
 на немецком, французском, английском или русском языке.
 
+Источников два, и пройти надо оба целиком: короткий список оборудования
+с сайта и описание продавца. В описании почти всегда есть то, чего нет
+в списке, — аудиосистема, камеры, отделка салона, диски, содержимое
+пакетов. Пропускать его нельзя: это самое ценное в комплектации.
+
+Работай по описанию строка за строкой, сверху вниз, в том же порядке,
+в каком оно написано, — так ничего не потеряется. Порядок в ответе значения
+не имеет, список всё равно будет пересортирован.
+
 Правила:
 1. Используй ТОЛЬКО те опции и оборудование, которые прямо указаны в объявлении.
 2. Ничего не додумывай и не добавляй от себя, даже если опция обычно входит
@@ -71,11 +84,23 @@ _SYSTEM_PROMPT = f"""Ты извлекаешь комплектацию авто
    если конкретная функция прямо не указана в тексте.
 4. Не превращай одну опцию в другую и не расширяй её смысл. Перевод должен
    максимально точно соответствовать оригиналу.
-5. Удаляй дублирующиеся пункты. Если одна и та же функция встречается
-   в разных формулировках, оставь один наиболее точный вариант.
+5. Одна функция — одна строка. Объявление описывает её по нескольку раз
+   разными словами («Sitzheizung vorn» и «Sitzheizung für Fahrer und
+   Beifahrer», «Rekuperationssystem» и «Bremsenergierückgewinnung») —
+   выведи такую функцию ОДИН раз, самой понятной формулировкой.
+   Если функция есть и в списке оборудования, и в описании продавца, бери
+   готовую строку из списка оборудования слово в слово: перевод описания
+   рядом с ней будет выглядеть как две разные опции.
+   Пакет и его же элементы — тоже одна строка: назвав «Пакет M Sport»,
+   не выводи «внешние элементы M Sport» и «специфические элементы
+   M Sportpaket» отдельно.
 6. Не включай: контакты продавца, адреса, условия финансирования и лизинга,
    юридические оговорки, рекламный текст, историю дилера, цены и скидки,
    сервисную информацию, приглашения приехать и позвонить.
+   Не включай и мелочь, которую покупатель не выбирает: обивку стоек, рам
+   и порогов, крючки, решётки, воздуховоды, число дверей, колёсную базу,
+   свес, грузоподъёмность оси. Коврики, потолок и обивку сидений — включай,
+   это видимая отделка.
 7. Коды заводских опций (цифры и буквы в скобках) не выводи — только
    понятное русское название оборудования.
 8. Названия фирменных систем и пакетов сохраняй, когда это важно:
@@ -87,11 +112,21 @@ _SYSTEM_PROMPT = f"""Ты извлекаешь комплектацию авто
 10. Не добавляй функции пакета, которые не перечислены в объявлении.
 11. Технические обозначения ABS, ACC, DAB, xDrive, DSC, ISOFIX, LED
     сохраняй в привычном виде.
-12. Формулировки делай короткими и понятными для автомобильного объявления:
-    до 55 символов, с заглавной буквы, без точки в конце.
-13. Если в объявлении явно указано отсутствие функции («ohne», «without»,
+12. Переводи полностью. В строке не должно остаться немецких, английских
+    или голландских слов — кроме фирменных названий из пункта 8 и
+    обозначений из пункта 11. «Shadow-Line Hochglanz» → «глянцевая отделка
+    Shadow Line», «Doppelspeiche Bicolor Schwarzgrau» → «двухцветные
+    черно-серые диски», «Durchladeeinrichtung» → «люк в спинке заднего
+    сиденья».
+13. Служебную приставку категории до двоеточия выбрасывай:
+    «Fahrassistenz-System: Park-Assistent» → «Ассистент парковки»,
+    «Innenausstattung: Interieurleisten M» → «Интерьерные вставки M».
+14. Формулировки короткие, как в автомобильном объявлении: не длиннее
+    55 символов, с заглавной буквы, без точки в конце. Если оригинал
+    длиннее — оставь суть, отбрось уточнения и перечисления.
+15. Если в объявлении явно указано отсутствие функции («ohne», «without»,
     «Entfall», «нет»), не выдавай её как имеющуюся опцию.
-14. Точность важнее полноты: лучше пропустить сомнительную опцию,
+16. Точность важнее полноты: лучше пропустить сомнительную опцию,
     чем добавить то, чего продавец прямо не подтвердил.
 
 Формат ответа — по одной опции в строке, две части через {SEP}:
@@ -162,11 +197,44 @@ def _sort_key(line: str) -> tuple[int, str]:
 
 
 def _clean_name(text: str) -> str:
-    """Название опции без маркеров списка, markdown и заводских кодов."""
+    """Название опции без маркеров списка, markdown, кодов и значков ®."""
     name = _MARKER_RE.sub("", text.strip())
     name = re.sub(r"\*\*|__", "", name)
     name = _CODE_RE.sub("", name)
+    name = name.replace("®", "").replace("™", "")
     return re.sub(r"\s{2,}", " ", name).strip(" .,;")
+
+
+def _drop_repeated_prefixes(names: list[str]) -> list[str]:
+    """
+    Убирает служебную приставку категории: «Система помощи водителю: Driving
+    Assistant Plus» → «Driving Assistant Plus».
+
+    Отличаем приставку от смысла по повторяемости: заголовок раздела
+    объявления попадает сразу в несколько строк, а «Обивка сидений:» —
+    в одну, и её трогать не надо.
+    """
+    counts: dict[str, int] = {}
+    for name in names:
+        head, sep, rest = name.partition(": ")
+        if sep and rest:
+            counts[head.lower()] = counts.get(head.lower(), 0) + 1
+
+    out = []
+    for name in names:
+        head, sep, rest = name.partition(": ")
+        if sep and rest and counts.get(head.lower(), 0) > 1:
+            name = rest[:1].upper() + rest[1:]
+        out.append(name)
+    return out
+
+
+def _shorten(name: str) -> str:
+    """Слишком длинную строку укорачиваем за счёт уточнений в скобках."""
+    if len(name) <= 55:
+        return name
+    short = re.sub(r"\s*\([^()]*\)", "", name).strip(" ,;")
+    return short if len(short) >= 12 else name
 
 
 def _key_words(text: str) -> set[str]:
@@ -179,6 +247,10 @@ def _dedupe(options: list[str]) -> list[str]:
     Одна и та же опция в двух формулировках («Потолок антрацит» и «Потолок
     Individual антрацит») — оставляем более подробную. Списки оборудования
     и описание продавца пересекаются, без этого КП вдвое длиннее.
+
+    Короткие строки сверяем целиком: у «Спортивного пакета» и «Спортивной
+    подвески» общее слово одно, но это разные опции. Длинным хватает
+    совпадения по большинству слов — они различаются уточнениями.
     """
     kept: list[str] = []
     kept_words: list[set[str]] = []
@@ -186,7 +258,7 @@ def _dedupe(options: list[str]) -> list[str]:
         words = _key_words(opt)
         if not words:
             continue
-        need = max(1, round(len(words) * 0.8))
+        need = len(words) if len(words) <= 3 else round(len(words) * 0.6)
         if any(len(words & prev) >= need for prev in kept_words):
             continue
         kept.append(opt)
@@ -194,9 +266,40 @@ def _dedupe(options: list[str]) -> list[str]:
     return kept
 
 
-def _parse_answer(text: str, source: str) -> list[str]:
-    """Разбор ответа модели: перевод + цитата, неподтверждённое выбрасываем."""
+def _add_missing(options: list[str], features: list[str], quotes: list[str]) -> list[str]:
+    """
+    Дописывает опции чек-листа, которых модель не назвала.
+
+    Чек-лист сайта уже по-русски и по определению точен, а модель, увлёкшись
+    описанием продавца, способна пропустить пневмоподвеску или массаж сидений.
+    Описание добавляет строки, но ничего не отменяет.
+
+    Строку, которую модель процитировала, считаем названной, даже если
+    перевела своими словами: иначе «Руль с подогревом» из чек-листа встанет
+    рядом с «Обогревом рулевого колеса» из описания.
+    """
+    quoted = " | ".join(_norm(q) for q in quotes)
+    out = list(options)
+    seen_words = [_key_words(o) for o in options]
+    for f in features:
+        words = _key_words(f)
+        if not words or _norm(f) in quoted:
+            continue
+        need = len(words) if len(words) <= 3 else round(len(words) * 0.6)
+        if any(len(words & prev) >= need for prev in seen_words):
+            continue
+        out.append(f)
+        seen_words.append(words)
+    return out
+
+
+def _parse_answer(text: str, source: str) -> tuple[list[str], list[str]]:
+    """
+    Разбор ответа модели: перевод + цитата, неподтверждённое выбрасываем.
+    Возвращает (опции, процитированные фрагменты объявления).
+    """
     out: list[str] = []
+    quotes: list[str] = []
     seen: set[str] = set()
 
     for raw in text.splitlines():
@@ -216,8 +319,10 @@ def _parse_answer(text: str, source: str) -> list[str]:
             continue
         seen.add(key)
         out.append(name)
+        quotes.append(quote)
 
-    return sorted(_dedupe(out), key=_sort_key)
+    out = [_shorten(n) for n in _drop_repeated_prefixes(out)]
+    return sorted(_dedupe(out), key=_sort_key), quotes
 
 
 def _sources(d: dict) -> tuple[list[str], str]:
@@ -253,29 +358,54 @@ async def build_options(d: dict) -> list[str]:
         parts.append("Описание продавца:\n" + description)
     user_prompt = "\n\n".join(parts)
 
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                OPENROUTER_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://localhost",
-                    "X-Title": "AutoKP Generator",
-                },
-                json={
-                    "model": MODEL,
-                    "messages": [
-                        {"role": "system", "content": _SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.1,
-                },
-            )
-            resp.raise_for_status()
-            answer = resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception:
+    # Разовая ошибка сети или 429 не должна тихо превращать КП в сырой
+    # чек-лист — пробуем дважды и в любом случае пишем причину в журнал
+    answer = ""
+    for attempt in (1, 2):
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(
+                    OPENROUTER_URL,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://localhost",
+                        "X-Title": "AutoKP Generator",
+                    },
+                    json={
+                        "model": MODEL,
+                        "messages": [
+                            {"role": "system", "content": _SYSTEM_PROMPT},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "temperature": 0.1,
+                        # Без рассуждения модель скользит по длинному описанию
+                        # и теряет строки: на живом Mercedes 4 попадания из 7
+                        # против 7 из 7. Тысячи токенов хватает, больше не даёт
+                        # ничего. Модели без этого режима параметр игнорируют.
+                        "reasoning": {"max_tokens": 1024},
+                    },
+                )
+                resp.raise_for_status()
+                answer = resp.json()["choices"][0]["message"]["content"].strip()
+            if answer:
+                break
+            log.warning("ИИ вернул пустой ответ (попытка %s из 2)", attempt)
+        except Exception as exc:
+            log.warning("ИИ не ответил (попытка %s из 2): %s", attempt, exc)
+        if attempt == 1:
+            await asyncio.sleep(2)
+
+    if not answer:
+        log.error("Комплектация собрана без ИИ: в КП уйдёт список оборудования как есть")
         return features
 
-    options = _parse_answer(answer, _norm(user_prompt))
-    return options if len(options) >= 5 else features
+    options, quotes = _parse_answer(answer, _norm(user_prompt))
+    if len(options) < 5:
+        log.error(
+            "ИИ вернул %s строк комплектации из %s — в КП уйдёт список оборудования",
+            len(options), len(answer.splitlines()),
+        )
+        return features
+
+    return sorted(_add_missing(options, features, quotes), key=_sort_key)
