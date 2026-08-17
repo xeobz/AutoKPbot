@@ -6,8 +6,14 @@
     color, features, power_hp, engine_l, fuel, gearbox
 """
 import re
+from html import unescape
 
 from bs4 import BeautifulSoup
+
+# Описание продавца — свободный текст, у дилеров там заводская комплектация
+# с кодами опций. Ограничение — чтобы в промт не уехала страница целиком.
+DESCRIPTION_LIMIT = 9000
+_DESC_ANCHOR = 'vip-vehicle-description-text">'
 
 _FEAT_RE = re.compile(r'\\"li\\",\\"([^\\"]{2,80})\\",\{\\"className\\":\\"CheckList')
 _ATTR_RE = re.compile(r'\\"tag\\":\\"([^\\"]+)\\",\\"value\\":\\"([^\\"]+)\\"')
@@ -258,6 +264,34 @@ def _extract_features(rsc: str) -> list[str]:
     return list(dict.fromkeys(names))
 
 
+def html_to_text(fragment: str) -> str:
+    """
+    Текст из куска разметки: пункты списка и абзацы становятся строками.
+    Нужен для описания продавца — оно приходит вёрсткой, а не текстом.
+    """
+    text = re.sub(r"<\s*(li|br|p|div|tr)\b[^>]*>", "\n", fragment or "", flags=re.I)
+    text = re.sub(r"<\s*(b|strong|h[1-6])\b[^>]*>", "\n\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = unescape(text).replace("\xa0", " ")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _extract_description(html: str) -> str:
+    """
+    Описание продавца целиком — источник опций, которых нет в чек-листе:
+    обивка, потолок, диски, содержимое заводских пакетов.
+    """
+    i = html.find(_DESC_ANCHOR)
+    if i < 0:
+        return ""
+    i += len(_DESC_ANCHOR)
+    j = html.find("</div>", i)
+    block = html[i : j if j > i else i + DESCRIPTION_LIMIT]
+    return html_to_text(block)[:DESCRIPTION_LIMIT]
+
+
 def _extract_attributes(rsc: str) -> dict:
     attrs: dict[str, str] = {}
     for tag, value in _ATTR_RE.findall(rsc):
@@ -313,6 +347,8 @@ def _parse_html(html: str) -> dict:
         "mileage": mileage,
         "color": color,
         "features": _extract_features(rsc),
+        # Описание ищем в самой вёрстке, а не в RSC: там оно готовым куском HTML
+        "description": _extract_description(html),
         "power_hp": parse_power_hp(attrs.get("power", "")),
         "engine_l": parse_engine_litres(
             attrs.get("cubicCapacity", ""), attrs.get("displacement", ""), full_title

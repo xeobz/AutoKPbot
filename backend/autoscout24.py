@@ -16,8 +16,10 @@ from urllib.parse import urlsplit
 from bs4 import BeautifulSoup
 
 from scraper import (
+    DESCRIPTION_LIMIT,
     SOURCE_AUTOSCOUT,
     fetch_html,
+    html_to_text,
     normalise_fuel,
     normalise_gearbox,
     parse_engine_litres,
@@ -340,6 +342,9 @@ def parse_autoscout24_html(html: str) -> dict:
                           or _as_text(vehicle.get("bodyColorRaw"))
                       ),
         "features":   _parse_features(vehicle),
+        # Описание продавца: свободный текст на языке объявления, часто
+        # с опциями, которых нет в списке оборудования
+        "description": html_to_text(_as_text(listing.get("description")))[:DESCRIPTION_LIMIT],
         "power_hp":   _as_int(vehicle.get("rawPowerInHp"))
                       or parse_power_hp(_as_text(vehicle.get("powerInHp"))),
         "engine_l":   _parse_engine_litres(vehicle, title),

@@ -1,16 +1,16 @@
 """
-Подготовка списка опций для КП.
+Сборка блока «Комплектация» для КП.
 
-Сам шаблон собирается кодом (kp.py) — здесь только приводим опции в порядок:
-выкидываем услуги дилера, сокращаем формулировки, а главное — сортируем по
-ценности. В подпись к фото влезает около тридцати строк, поэтому важно, чтобы
-под обрезку уходило базовое, а не то, что продаёт машину.
+Источников два: список оборудования (чек-лист сайта) и описание продавца —
+свободный текст на языке объявления, где у дилеров лежит заводская
+комплектация с кодами опций. Второй источник заметно богаче: обивка, потолок,
+пакеты, диски конкретной модели есть только там.
 
-ИИ здесь работает сортировщиком, а не автором. Каждая строка его ответа
-сверяется с опциями объявления: если это сокращение исходной строки — берём
-формулировку ИИ, если он что-то домыслил — берём текст объявления, а если
-строку опознать не удалось, выбрасываем. Обещать клиенту опцию, которой у
-машины нет, дороже, чем потерять строчку.
+ИИ переводит и приводит формулировки в порядок, но не выдумывает: вместе
+с каждой строкой он обязан вернуть фрагмент объявления, из которого она
+взята. Фрагмент проверяется по тексту объявления, и строки без подтверждения
+выбрасываются. Обещать клиенту опцию, которой у машины нет, дороже, чем
+потерять строчку.
 """
 import os
 import re
@@ -18,11 +18,23 @@ import re
 import httpx
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "openai/gpt-4o-mini"
+# Модель должна читать описание продавца на немецком и переводить его точно.
+# Дешёвые модели описание попросту игнорируют — проверено на живых объявлениях.
+# Сменить можно секретом AI_MODEL, не трогая код.
+MODEL = os.getenv("AI_MODEL") or "anthropic/claude-sonnet-4.5"
+
+# Маркер списка в начале строки: «- », «* », «1. ». Цифры в начале названия
+# («19" диски», «2-зонный климат») трогать нельзя, поэтому не strip по символам.
+_MARKER_RE = re.compile(r"^\s*(?:[-—–•*]+|\d{1,2}[.)])\s+")
+# Заводской код опции в скобках: (654), (2TE), (43R) — в КП он не нужен
+_CODE_RE = re.compile(r"\s*\((?=[^()]*\d)[A-Za-z0-9\-]{2,6}\)")
+
+# Разделитель между переводом и подтверждающим фрагментом в ответе модели
+SEP = "||"
 
 # Услуги дилера — к самой машине отношения не имеют, убираем совсем.
-# Парсер их отсекает по разметке, но в старых черновиках и в истории они
-# ещё лежат вперемешку с опциями.
+# Парсер mobile.de отсекает их по разметке, но в старых черновиках
+# и в истории они ещё лежат вперемешку с опциями.
 _SERVICES = (
     "финансирование", "лизинг", "тест-драйв", "трейд-ин", "trade-in",
     "обмен", "кредит", "доставка", "гарантия производителя", "гарантия мобильности",
@@ -33,8 +45,8 @@ _SERVICES = (
     "официальным оператором",
 )
 
-# Базовое, что есть у всех: не выкидываем, но опускаем в конец списка —
-# если текст не влезает, режется именно это
+# Базовое, что есть у всех: в запасном списке (когда ИИ недоступен)
+# опускаем это в конец, чтобы под обрезку уходило именно оно
 _LOW_VALUE = (
     "abs", "esp", "esc", "asr", "isofix", "иммобилайзер", "гидроусилитель",
     "усилитель руля", "подушка безоп", "подушки безоп", "airbag",
@@ -47,35 +59,48 @@ _LOW_VALUE = (
     "датчик освещенности", "ручное переключение передач",
 )
 
-# Сколько строк просим у модели: в подпись к фото влезает около 30-35,
-# остальное всё равно срежет лимит — пусть лучше отберёт лучшее
-AI_TOP_LINES = 34
+_SYSTEM_PROMPT = f"""Ты извлекаешь комплектацию автомобиля из объявления
+и переводишь её на русский для публикации в Telegram. Объявление приходит
+на немецком, французском, английском или русском языке.
 
-# Ни одной опции по имени: модель охотно переписывает примеры из промта в
-# ответ, и в КП появляется полный привод у заднеприводной машины.
-_SYSTEM_PROMPT = f"""Ты готовишь блок «Комплектация» для коммерческого предложения
-на автомобиль. Клиент читает его с телефона, места мало.
+Правила:
+1. Используй ТОЛЬКО те опции и оборудование, которые прямо указаны в объявлении.
+2. Ничего не додумывай и не добавляй от себя, даже если опция обычно входит
+   в пакет или стандартную комплектацию модели.
+3. Не определяй комплектацию по модели, году выпуска или названию пакета,
+   если конкретная функция прямо не указана в тексте.
+4. Не превращай одну опцию в другую и не расширяй её смысл. Перевод должен
+   максимально точно соответствовать оригиналу.
+5. Удаляй дублирующиеся пункты. Если одна и та же функция встречается
+   в разных формулировках, оставь один наиболее точный вариант.
+6. Не включай: контакты продавца, адреса, условия финансирования и лизинга,
+   юридические оговорки, рекламный текст, историю дилера, цены и скидки,
+   сервисную информацию, приглашения приехать и позвонить.
+7. Коды заводских опций (цифры и буквы в скобках) не выводи — только
+   понятное русское название оборудования.
+8. Названия фирменных систем и пакетов сохраняй, когда это важно:
+   BMW Live Cockpit Professional, Driving Assistant Professional,
+   Parking Assistant Professional, M Sport, Harman/Kardon, Burmester,
+   Travel & Comfort System и подобные.
+9. Если после названия пакета в объявлении прямо перечислено его содержимое,
+   выведи подтверждённые опции этого пакета отдельными пунктами.
+10. Не добавляй функции пакета, которые не перечислены в объявлении.
+11. Технические обозначения ABS, ACC, DAB, xDrive, DSC, ISOFIX, LED
+    сохраняй в привычном виде.
+12. Формулировки делай короткими и понятными для автомобильного объявления:
+    до 55 символов, с заглавной буквы, без точки в конце.
+13. Если в объявлении явно указано отсутствие функции («ohne», «without»,
+    «Entfall», «нет»), не выдавай её как имеющуюся опцию.
+14. Точность важнее полноты: лучше пропустить сомнительную опцию,
+    чем добавить то, чего продавец прямо не подтвердил.
 
-Тебе дают список опций конкретной машины. Твоя работа — отбор и порядок,
-а не сочинение: выбери не больше {AI_TOP_LINES} строк и расставь их по убыванию
-ценности для покупателя.
+Формат ответа — по одной опции в строке, две части через {SEP}:
 
-Порядок ценности:
-1. то, что редко встречается и дорого стоит при заказе;
-2. комфорт, который чувствуется в каждой поездке;
-3. системы помощи водителю и безопасность сверх обязательной;
-4. мультимедиа и связь.
-То, что есть на любой машине этого класса и года, не включай вовсе:
-эти строки дописываются в конец автоматически, а места в ответе жаль.
+Русское название{SEP}фрагмент объявления, дословно
 
-Жёсткие правила:
-— бери строки только из присланного списка. Не добавляй ни одной опции от себя,
-  даже если она обычна для этой модели: клиент получит машину без неё;
-— одна строка ответа — одна строка из списка, не объединяй и не разделяй;
-— формулировку можно сократить и перевести на русский, но только теми словами,
-  которые уже есть в этой строке. Ничего не дописывай;
-— в ответе только строки опций: без нумерации, дефисов, markdown,
-  заголовков и пояснений."""
+Фрагмент — точная цитата из присланного текста, по которой видно, что опция
+есть. Строки без дословной цитаты будут отброшены автоматически.
+Никакой нумерации, дефисов, markdown, заголовков и пояснений."""
 
 
 def _is_service(text: str) -> bool:
@@ -86,72 +111,6 @@ def _is_service(text: str) -> bool:
 def _is_low_value(text: str) -> bool:
     low = text.lower()
     return any(b in low for b in _LOW_VALUE)
-
-
-def _stem(word: str) -> str:
-    """Грубая основа слова: «руля» и «руль» → «рул», «сидений» → «сиден»."""
-    return word[:5].rstrip("аеёиоуыэюяьъй")
-
-
-def _stems(text: str) -> set[str]:
-    """Основы значимых слов строки: «Подогрев сидений» → {'подог', 'сиден'}."""
-    return {_stem(w) for w in re.findall(r"[^\W\d_]{4,}", text.lower(), re.UNICODE)}
-
-
-def _best_option(stems: set[str], options_low: list[str]) -> tuple[int, int] | None:
-    """
-    Опция объявления, о которой говорит строка ИИ, и сколько её слов подтвердилось.
-
-    Ищем подстрокой по всему тексту опции, а не по отдельным словам: у mobile.de
-    хватает слитных формулировок вроде «Электросиденья», где нужное слово внутри.
-    Если больше половины слов строки взято не из этой опции — считаем, что ИИ
-    сочинил, и не опознаём её вовсе.
-    """
-    best_i, best_hit = -1, 0
-    for i, low in enumerate(options_low):
-        hit = sum(1 for s in stems if s in low)
-        if hit > best_hit or (hit == best_hit and hit and len(low) < len(options_low[best_i])):
-            best_i, best_hit = i, hit
-    if best_hit * 2 < len(stems):
-        return None
-    return best_i, best_hit
-
-
-def _apply_order(lines: list[str], options: list[str]) -> list[str]:
-    """Переносит порядок, предложенный ИИ, на реальные опции объявления."""
-    options_low = [o.lower() for o in options]
-    options_stems = [_stems(o) for o in options]
-
-    used: set[int] = set()
-    out: list[str] = []
-
-    for line in lines:
-        stems = _stems(line)
-        if not stems:
-            continue
-        found = _best_option(stems, options_low)
-        if not found:
-            continue
-        i, hit = found
-        if i in used:
-            continue
-        used.add(i)
-        # Все слова строки нашлись в одной опции — это её сокращение, берём как есть.
-        # Иначе ИИ что-то добавил от себя, и в КП идёт формулировка объявления.
-        out.append(line if hit == len(stems) else options[i])
-        # Строка целиком называет ещё одну опцию («Android Auto и Apple CarPlay») —
-        # ставим её следом, чтобы не уехала в самый низ списка
-        for j, opt_stems in enumerate(options_stems):
-            if j not in used and len(opt_stems) >= 2 and opt_stems <= stems:
-                used.add(j)
-                out.append(options[j])
-
-    if len(out) < 5:                    # ответ невнятный — доверяем своей подготовке
-        return options
-
-    # Хвостом дописываем то, что модель не назвала: если места хватит,
-    # опции всё равно попадут в КП, а не потеряются
-    return out + [o for i, o in enumerate(options) if i not in used]
 
 
 def _prepare(features: list[str]) -> list[str]:
@@ -173,31 +132,129 @@ def _prepare(features: list[str]) -> list[str]:
     return valuable + basic
 
 
-async def shorten_options(features: list[str], max_lines: int | None = None) -> list[str]:
-    """
-    Список опций для КП: все, что есть у машины, в порядке ценности.
-    Сколько из них поместится — решает лимит подписи при сборке текста.
+def _norm(text: str) -> str:
+    """Текст для сверки: без регистра, знаков и лишних пробелов."""
+    return " ".join(re.findall(r"[^\W_]+", (text or "").lower(), re.UNICODE))
 
-    Если ИИ недоступен или ответил невнятно, отдаём подготовленный список
-    как есть: у mobile.de/ru и autoscout24.ru опции и так по-русски.
+
+def _confirmed(quote: str, source: str) -> bool:
     """
-    prepared = _prepare(features)
-    if not prepared:
+    Есть ли цитата в объявлении. Дословное совпадение — обычный случай;
+    если модель слегка переставила слова, засчитываем по словам: почти все
+    должны найтись в тексте. Полностью выдуманную опцию так не подтвердить.
+    """
+    q = _norm(quote)
+    if not q:
+        return False
+    if q in source:
+        return True
+    words = [w for w in q.split() if len(w) >= 3]
+    if not words:
+        return False
+    hits = sum(1 for w in words if w in source)
+    return hits >= max(1, round(len(words) * 0.8))
+
+
+def _sort_key(line: str) -> tuple[int, str]:
+    """Алфавит: сначала латиница, потом кириллица, цифры в самый конец."""
+    first = line[:1]
+    return (1 if first.isdigit() else 0, line.lower())
+
+
+def _clean_name(text: str) -> str:
+    """Название опции без маркеров списка, markdown и заводских кодов."""
+    name = _MARKER_RE.sub("", text.strip())
+    name = re.sub(r"\*\*|__", "", name)
+    name = _CODE_RE.sub("", name)
+    return re.sub(r"\s{2,}", " ", name).strip(" .,;")
+
+
+def _key_words(text: str) -> set[str]:
+    """Огрубленные слова строки — по ним ищем повторы формулировок."""
+    return {w[:4] for w in _norm(text).split() if len(w) >= 3}
+
+
+def _dedupe(options: list[str]) -> list[str]:
+    """
+    Одна и та же опция в двух формулировках («Потолок антрацит» и «Потолок
+    Individual антрацит») — оставляем более подробную. Списки оборудования
+    и описание продавца пересекаются, без этого КП вдвое длиннее.
+    """
+    kept: list[str] = []
+    kept_words: list[set[str]] = []
+    for opt in sorted(options, key=len, reverse=True):
+        words = _key_words(opt)
+        if not words:
+            continue
+        need = max(1, round(len(words) * 0.8))
+        if any(len(words & prev) >= need for prev in kept_words):
+            continue
+        kept.append(opt)
+        kept_words.append(words)
+    return kept
+
+
+def _parse_answer(text: str, source: str) -> list[str]:
+    """Разбор ответа модели: перевод + цитата, неподтверждённое выбрасываем."""
+    out: list[str] = []
+    seen: set[str] = set()
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+
+        name, _, quote = line.partition(SEP)
+        name = _clean_name(name)
+        quote = quote.strip()
+        if not name or not quote:
+            continue                      # без цитаты подтвердить нечем
+        if not _confirmed(quote, source):
+            continue
+        key = _norm(name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
+
+    return sorted(_dedupe(out), key=_sort_key)
+
+
+def _sources(d: dict) -> tuple[list[str], str]:
+    """Что показываем модели: список оборудования и описание продавца."""
+    features = _prepare(d.get("features", []) or [])
+    description = (d.get("description") or "").strip()
+    return features, description
+
+
+async def build_options(d: dict) -> list[str]:
+    """
+    Комплектация для КП. Если ИИ недоступен или ответил невнятно, отдаём
+    список оборудования как есть: у mobile.de/ru и autoscout24.ru он и так
+    по-русски, а выдумок в нём быть не может по определению.
+    """
+    # Уже посчитано в предпросмотре — второй раз модель не гоняем
+    cached = d.get("kp_options")
+    if isinstance(cached, list) and cached:
+        return [str(x) for x in cached]
+
+    features, description = _sources(d)
+    if not features and not description:
         return []
-    if max_lines:
-        prepared = prepared[:max_lines]
 
     api_key = os.getenv("OPENROUTER_API_KEY", "")
     if not api_key:
-        return prepared
+        return features
 
-    user_prompt = (
-        f"Опции автомобиля ({len(prepared)} шт.). Отбери лучшее для КП:\n\n"
-        + "\n".join(prepared)
-    )
+    parts = []
+    if features:
+        parts.append("Список оборудования из объявления:\n" + "\n".join(features))
+    if description:
+        parts.append("Описание продавца:\n" + description)
+    user_prompt = "\n\n".join(parts)
 
     try:
-        async with httpx.AsyncClient(timeout=90) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 OPENROUTER_URL,
                 headers={
@@ -216,15 +273,9 @@ async def shorten_options(features: list[str], max_lines: int | None = None) -> 
                 },
             )
             resp.raise_for_status()
-            text = resp.json()["choices"][0]["message"]["content"].strip()
+            answer = resp.json()["choices"][0]["message"]["content"].strip()
     except Exception:
-        return prepared
+        return features
 
-    lines: list[str] = []
-    for raw in text.splitlines():
-        line = raw.strip().lstrip("-—•*0123456789. ").strip()
-        line = re.sub(r"\*\*|__", "", line)
-        if line and line.lower() not in (l.lower() for l in lines):
-            lines.append(line)
-
-    return _apply_order(lines, prepared)
+    options = _parse_answer(answer, _norm(user_prompt))
+    return options if len(options) >= 5 else features

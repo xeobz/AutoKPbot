@@ -32,7 +32,7 @@ from telegram import Bot
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-from ai import shorten_options
+from ai import build_options
 from calc import (
     DIRECTION_FIELDS,
     DIRECTION_LABELS,
@@ -44,7 +44,7 @@ from calc import (
     netto,
     total_rub,
 )
-from kp import CAPTION_LIMIT, build_kp_text, tg_len
+from kp import CAPTION_LIMIT, build_kp_parts, tg_len
 from kpsend import CONTACT, build_captions, pick_photos, send_kp
 from scraper import find_listing_url, scrape
 from sheets import append_car_row, append_kult40_row, append_msk_row, update_car_row
@@ -350,12 +350,24 @@ async def preview(req: PreviewReq, user: dict = Depends(current_user)):
     rec = _load_draft(req.draft_id, user)
     d   = _apply_request(rec["data"], req)
 
-    options = await shorten_options(d.get("features", []))
+    options = await build_options(d)
+    # Разбор описания моделью — самое долгое место. Кладём результат в черновик:
+    # отправка не считает то же самое второй раз, а клиент получает ровно тот
+    # текст, который менеджер видел в предпросмотре.
+    if options:
+        rec["data"]["kp_options"] = options
+        save_draft(req.draft_id, rec["user_id"], rec["chat_id"], rec["data"])
+
     # Номер лота присваивается при записи в таблицу — в предпросмотре его ещё нет
-    text = build_kp_text(d, total_rub(d), options, "—", CONTACT)
+    parts = build_kp_parts(d, total_rub(d), options, "—", CONTACT)
     # В предпросмотре показываем текст как его увидит клиент — без HTML-разметки
-    plain = html_lib.unescape(re.sub(r"<[^>]+>", "", text))
-    return {"text": plain, "length": tg_len(text), "limit": CAPTION_LIMIT}
+    plain = [html_lib.unescape(re.sub(r"<[^>]+>", "", p)) for p in parts]
+    return {
+        "parts":  plain,
+        "text":   "\n".join(plain),          # для совместимости со старым фронтом
+        "length": tg_len(parts[0]),
+        "limit":  CAPTION_LIMIT,
+    }
 
 
 @api.post("/submit")

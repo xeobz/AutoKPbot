@@ -28,6 +28,12 @@ import unicodedata
 CAPTION_LIMIT = 1024
 # Небольшой запас: считаем длину приблизительно, лучше недобрать, чем упереться.
 SAFE_LIMIT = 1010
+# Обычное сообщение вмещает 4096 — в него уходит хвост комплектации,
+# если она не влезла в подпись к фото
+MESSAGE_LIMIT = 4096
+SAFE_MESSAGE_LIMIT = 4000
+
+BULLET = "* "
 
 # Подпись под ценой — своя для каждого направления
 PRICE_FOOTERS = {
@@ -141,7 +147,7 @@ def _emoji_tag(custom_emoji_id: str | None, fallback: str) -> str:
     return fallback
 
 
-def build_kp_text(
+def build_kp_parts(
     d: dict,
     total_rub: float,
     options: list[str],
@@ -152,10 +158,14 @@ def build_kp_text(
     price_emoji_id: str | None = None,
     header_emoji_id: str | None = None,
     header_emoji_fallback: str = "🇪🇺",
-) -> str:
+) -> list[str]:
     """
-    Собирает КП и укладывает его в лимит подписи: при нехватке места
-    срезаются опции снизу, шапка/цена/контакты остаются всегда.
+    Собирает КП. Обычно это одно сообщение — подпись к фото.
+
+    Если комплектация в подпись не влезает, режем на два сообщения:
+    первое (подпись к фото) — шапка и начало комплектации, второе —
+    её продолжение с ценой и контактами. Склеенные подряд, они дают
+    ровно тот же текст: ничего не теряется и не повторяется.
     """
     direction = d.get("direction", "minsk")
     title = html.escape(car_title(d))
@@ -172,14 +182,32 @@ def build_kp_text(
 
     tail = ["", price_line, footer, "", "Связаться:", contact, "", f"#{lot_number}"]
 
-    def assemble(opts: list[str]) -> str:
-        body = ["", "Комплектация:"] + [html.escape(o) for o in opts] if opts else []
+    def bullets(opts: list[str]) -> list[str]:
+        return [BULLET + html.escape(o) for o in opts]
+
+    def wrap(lines: list[str]) -> str:
         # Весь текст КП жирный — одной обёрткой, без вложенных тегов внутри
-        return "<b>" + "\n".join(head + body + tail) + "</b>"
+        return "<b>" + "\n".join(lines) + "</b>"
 
     opts = list(options)
-    text = assemble(opts)
-    while opts and tg_len(text) > SAFE_LIMIT:
-        opts.pop()
-        text = assemble(opts)
-    return text
+    body = ["", "Комплектация:"] + bullets(opts) if opts else []
+    whole = wrap(head + body + tail)
+    if tg_len(whole) <= SAFE_LIMIT:
+        return [whole]
+
+    # Первая часть — сколько опций поместится в подпись к фото
+    fit = len(opts)
+    while fit > 0:
+        first = wrap(head + ["", "Комплектация:"] + bullets(opts[:fit]))
+        if tg_len(first) <= SAFE_LIMIT:
+            break
+        fit -= 1
+
+    # Вторая — всё остальное вместе с ценой и контактами
+    rest = opts[fit:]
+    second = wrap(bullets(rest) + tail)
+    while rest and tg_len(second) > SAFE_MESSAGE_LIMIT:
+        rest.pop()
+        second = wrap(bullets(rest) + tail)
+
+    return [first, second]

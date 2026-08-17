@@ -590,15 +590,23 @@ function photosBlock() {
 /* --- 10. Предпросмотр --- */
 function previewBlock() {
   const p = st.preview;
-  const over = p && Number(p.length) > Number(p.limit);
+  // Комплектация не влезла в подпись к фото — уйдёт двумя сообщениями подряд
+  const parts = p ? (Array.isArray(p.parts) && p.parts.length ? p.parts : [p.text || '']) : [];
   return h('section', { class: 'card card-pad' },
     h('h2', { class: 'card-title', text: 'Предпросмотр КП' }),
     st.previewLoading && !p ? stateLoading('Собираем текст…') : null,
     !st.previewLoading && st.previewError && !p ? stateError(st.previewError, () => loadPreview()) : null,
     p ? frag(
-      h('pre', { class: 'kp-text', text: p.text || '' }),
-      h('div', { class: 'kp-counter' + (over ? ' over' : ''), text: `${fmtInt(p.length)} / ${fmtInt(p.limit)} символов` }),
-      over ? h('div', { class: 'mt8' }, errBox('Текст длиннее лимита подписи — уберите часть фото или сократите описание.')) : null,
+      ...parts.map((text, i) => frag(
+        parts.length > 1
+          ? h('div', { class: 'hint small', text: i === 0 ? 'Сообщение 1 — с фото' : 'Сообщение 2 — продолжение' })
+          : null,
+        h('pre', { class: 'kp-text', text }),
+      )),
+      h('div', { class: 'kp-counter', text: `${fmtInt(p.length)} / ${fmtInt(p.limit)} символов в подписи` }),
+      parts.length > 1
+        ? h('div', { class: 'hint small mt8', text: 'Комплектация целиком не влезает в подпись — бот пришлёт её двумя сообщениями.' })
+        : null,
     ) : null,
   );
 }

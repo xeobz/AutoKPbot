@@ -26,6 +26,7 @@ jobs:
             # ── Записываем .env из GitHub Secrets ───────────────────────────
             cat > .env <<EOF
             OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+            AI_MODEL=${{ secrets.AI_MODEL }}
             TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
             ADMIN_TELEGRAM_ID=${{ secrets.ADMIN_TELEGRAM_ID }}
             GOOGLE_SHEET_ID=${{ secrets.GOOGLE_SHEET_ID }}

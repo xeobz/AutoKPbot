@@ -5,9 +5,9 @@ import logging
 
 from telegram import InputMediaPhoto
 
-from ai import shorten_options
+from ai import build_options
 from calc import total_rub
-from kp import brand_candidates, build_kp_text
+from kp import brand_candidates, build_kp_parts
 from storage import get_brand_emoji, get_float, get_optional
 
 CONTACT = "@Aleksandr_Montaro"
@@ -51,12 +51,15 @@ def pick_photos(all_photos: list[str]) -> list[str]:
     return [all_photos[i] for i in idxs]
 
 
-async def build_captions(d: dict, car_num: int | str, contact: str = CONTACT) -> tuple[str, str]:
+async def build_captions(
+    d: dict, car_num: int | str, contact: str = CONTACT
+) -> tuple[list[str], list[str]]:
     """
-    Текст КП. Возвращает (с премиум-эмодзи, без них) — второй нужен как запасной,
+    Текст КП частями: одна — если всё влезло в подпись к фото, иначе две.
+    Возвращает (с премиум-эмодзи, без них) — второй набор нужен как запасной,
     если Telegram откажется принять custom emoji.
     """
-    options = await shorten_options(d.get("features", []))
+    options = await build_options(d)
     total   = total_rub(d)
 
     # Сначала пробуем составную марку («Alfa Romeo»), потом одно слово
@@ -71,7 +74,7 @@ async def build_captions(d: dict, car_num: int | str, contact: str = CONTACT) ->
     header_emoji_id = get_optional("header_emoji_id")
     header_fallback = get_optional("header_emoji") or "🇪🇺"
 
-    with_emoji = build_kp_text(
+    with_emoji = build_kp_parts(
         d, total, options, car_num, contact,
         brand_emoji_id=(rec or {}).get("custom_emoji_id"),
         brand_emoji_fallback=fallback,
@@ -79,7 +82,7 @@ async def build_captions(d: dict, car_num: int | str, contact: str = CONTACT) ->
         header_emoji_id=header_emoji_id,
         header_emoji_fallback=header_fallback,
     )
-    plain = build_kp_text(
+    plain = build_kp_parts(
         d, total, options, car_num, contact,
         brand_emoji_fallback=fallback,
         header_emoji_fallback=header_fallback,
@@ -99,12 +102,28 @@ async def send_kp(
     Отправляет КП: текст подписью к первому фото + альбом.
     photos=None — выбрать автоматически (с шагом); иначе берём переданный список
     (так приходит выбор из мини-аппа).
+
+    Комплектация может не влезть в подпись — тогда её хвост вместе с ценой
+    и контактами уходит следующим сообщением.
     Возвращает данные для последующей замены фото или None, если фото не было.
     """
-    caption, caption_plain = await build_captions(d, car_num, contact)
+    parts, parts_plain = await build_captions(d, car_num, contact)
+    caption, caption_plain = parts[0], parts_plain[0]
+    rest, rest_plain = parts[1:], parts_plain[1:]
 
     all_photos = d.get("photos", []) or []
     chosen     = [_telegram_photo(u) for u in (photos or pick_photos(all_photos))]
+
+    async def _send_rest(texts: list[str]) -> None:
+        """Продолжение КП отдельными сообщениями — с тем же запасным вариантом."""
+        for i, text in enumerate(texts):
+            try:
+                await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            except Exception as exc:
+                log.warning("Продолжение КП не ушло (%s), пробую без премиум-эмодзи", exc)
+                await bot.send_message(
+                    chat_id=chat_id, text=rest_plain[i], parse_mode="HTML"
+                )
 
     async def _send(text: str) -> list[int]:
         if len(chosen) == 1:
@@ -122,6 +141,7 @@ async def send_kp(
             await bot.send_message(chat_id=chat_id, text=caption, parse_mode="HTML")
         except Exception:
             await bot.send_message(chat_id=chat_id, text=caption_plain, parse_mode="HTML")
+        await _send_rest(rest)
         return None
 
     try:
@@ -138,6 +158,8 @@ async def send_kp(
                 chat_id=chat_id, photo=chosen[0], caption=caption, parse_mode="HTML"
             )
             photo_msg_ids = [msg.message_id]
+
+    await _send_rest(rest)
 
     return {
         "chat_id":       chat_id,
