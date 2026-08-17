@@ -67,6 +67,8 @@ function freshState() {
     customOpen: false, customValue: '',
     vatCustomOpen: false, vatCustomValue: '',
     fields: { customs_eur: '', util_rub: '', customs_tks_rub: '', evacuator_rub: '' },
+    utilChosen: false,       // утиль спрашиваем: льготный положен не всякой машине
+    utilCustomOpen: false, utilCustomValue: '',
     calc: null, calcLoading: false, calcError: '',
     photos: [],
     preview: null, previewLoading: false, previewError: '',
@@ -102,6 +104,7 @@ function build() {
   if (st.vat) parts.push(stepBuyback());
   if (st.buybackChosen) {
     if (fieldList().length) parts.push(stepFields());
+    if (asksUtil()) parts.push(stepUtil());
     parts.push(calcBlock());
     if (st.withKp) {
       parts.push(photosBlock());
@@ -245,6 +248,10 @@ function stepDirection() {
         onclick: () => {
           haptic.select();
           st.direction = d.key;
+          // У направлений разные расходы: выбранный утиль к новому не относится
+          st.utilChosen = false;
+          st.utilCustomOpen = false;
+          st.fields.util_rub = '';
           st.open = 'counterparty';
           render();
           recalcNow();
@@ -464,6 +471,81 @@ function stepFields() {
   });
 }
 
+/* --- 7б. Утильсбор (Культ40 и МСК) --- */
+
+/** У Минска утиль вводится полем, у остальных — выбором: льготный или свой. */
+function asksUtil() {
+  return st.direction === 'kult40' || st.direction === 'msk';
+}
+
+function reducedUtil() {
+  const v = st.calc && Number(st.calc.util_reduced_rub);
+  return Number.isFinite(v) && v > 0 ? v : 5200;
+}
+
+function stepUtil() {
+  const reduced = reducedUtil();
+  const value = toNum(st.fields.util_rub);
+  const isReduced = st.utilChosen && Number(value) === reduced;
+  const isOwn = st.utilChosen && !isReduced;
+
+  const pick = (v) => {
+    haptic.select();
+    st.fields.util_rub = String(v);
+    st.utilChosen = true;
+    st.utilCustomOpen = false;
+    st.open = null;
+    render();
+    recalcNow();
+  };
+
+  const applyCustom = () => {
+    const v = toNum(st.utilCustomValue);
+    if (!v) { toast('Впишите сумму утильсбора в рублях', 'error'); return; }
+    pick(v);
+  };
+
+  return step({
+    key: 'util', num: fieldList().length ? 7 : 6, title: 'Утильсбор',
+    done: st.utilChosen,
+    summary: st.utilChosen ? `${fmtRub(value)}${isReduced ? ' · льготный' : ''}` : '',
+    body: () => h('div', {},
+      h('div', { class: 'chips' },
+        h('button', {
+          class: 'chip chip-wide', type: 'button',
+          'aria-pressed': isReduced ? 'true' : 'false',
+          onclick: () => pick(reduced),
+        },
+          h('span', { class: 'chip-main', text: fmtRub(reduced) }),
+          h('span', { class: 'chip-sub', text: 'льготный' }),
+        ),
+        h('button', {
+          class: 'chip chip-wide', type: 'button',
+          'aria-pressed': (isOwn || st.utilCustomOpen) ? 'true' : 'false',
+          onclick: () => {
+            st.utilCustomOpen = !st.utilCustomOpen;
+            if (st.utilCustomOpen && isOwn) st.utilCustomValue = String(value);
+            render();
+          },
+        },
+          h('span', { class: 'chip-main', text: isOwn ? fmtRub(value) : 'Своя сумма' }),
+          h('span', { class: 'chip-sub', text: isOwn ? 'вручную' : 'ввести вручную' }),
+        ),
+      ),
+      st.utilCustomOpen ? h('div', { class: 'row mt8' },
+        h('input', {
+          class: 'input num grow', type: 'text', inputmode: 'decimal',
+          placeholder: 'Сумма утиля, ₽', value: st.utilCustomValue,
+          'data-focus-key': 'custom-util',
+          oninput: (e) => { st.utilCustomValue = e.target.value; },
+          onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); applyCustom(); } },
+        }),
+        h('button', { class: 'btn', type: 'button', text: 'Применить', onclick: applyCustom }),
+      ) : null,
+    ),
+  });
+}
+
 /* --- 8. Расчёт --- */
 
 // Эмодзи уместны в чате, но не в интерфейсе: снимаем ведущий значок,
@@ -540,6 +622,10 @@ function confirmBlock() {
     ['Направление', dirLabel(st.direction)],
     ['Контрагент', st.counterparty.trim()],
     ['Выкуп', buybackSummary() || '—'],
+    // Сумма утиля отличается в сотни раз — её видно перед необратимой отправкой
+    ...(asksUtil() ? [['Утиль', st.utilChosen
+      ? `${fmtRub(toNum(st.fields.util_rub))}${Number(toNum(st.fields.util_rub)) === reducedUtil() ? ' · льготный' : ''}`
+      : '—']] : []),
     ...(st.withKp ? [['Фото', `${st.photos.length} шт.`]] : []),
     ['Под ключ', st.calc ? fmtRub(st.calc.total_rub) : '—'],
   ];
@@ -694,7 +780,10 @@ async function loadPreview() {
 function isReady() {
   // Фото нужны только когда готовим КП
   const photosOk = !st.withKp || st.photos.length > 0;
-  return !!(st.draftId && st.direction && st.vat && st.counterparty.trim() && st.buybackChosen && photosOk);
+  // Утиль не подставляем молча: льготный положен не всякой машине
+  const utilOk = !asksUtil() || st.utilChosen;
+  return !!(st.draftId && st.direction && st.vat && st.counterparty.trim()
+            && st.buybackChosen && utilOk && photosOk);
 }
 
 function syncMainButton() {

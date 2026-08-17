@@ -128,6 +128,11 @@ function detailScreen() {
   const rows = d.rows || [];
   const dirKeys = (Array.isArray(data.fields) && data.fields.length ? data.fields : (DIR_FIELDS[data.direction] || []))
     .filter((k) => FIELD_LABELS[k]);
+  // У Культ40 и МСК утиль выбирается кнопкой, а не полем, но исправить сумму
+  // в готовой записи всё равно нужно
+  if ((data.direction === 'kult40' || data.direction === 'msk') && !dirKeys.includes('util_rub')) {
+    dirKeys.push('util_rub');
+  }
   const bb = normBuyback(st.edits.buyback !== undefined ? st.edits.buyback : data.buyback);
 
   const val = (key, fallback) => (st.edits[key] !== undefined ? st.edits[key] : (fallback ?? ''));

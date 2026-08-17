@@ -43,6 +43,7 @@ from calc import (
     default_logistics,
     netto,
     total_rub,
+    util_is_reduced,
 )
 from kp import CAPTION_LIMIT, build_kp_parts, tg_len
 from kpsend import CONTACT, build_captions, pick_photos, send_kp
@@ -340,6 +341,8 @@ async def calc_endpoint(req: CalcReq, user: dict = Depends(current_user)):
         "rows":             card_rows(d),
         "buyback_options":  buyback_options(netto(d)),
         "buyback_min_eur":  get_float("buyback_min_eur", 2500),
+        # Льготный утиль — подпись на кнопке выбора у Культ40 и МСК
+        "util_reduced_rub": get_float("util_fixed_rub", 5200),
         "fields":           DIRECTION_FIELDS[req.direction],
         "rates":            _rates_payload(),
     }
@@ -361,7 +364,8 @@ async def preview(req: PreviewReq, user: dict = Depends(current_user)):
         save_draft(req.draft_id, rec["user_id"], rec["chat_id"], rec["data"])
 
     # Номер лота присваивается при записи в таблицу — в предпросмотре его ещё нет
-    parts = build_kp_parts(d, total_rub(d), options, "—", CONTACT)
+    parts = build_kp_parts(d, total_rub(d), options, "—", CONTACT,
+                           util_reduced=util_is_reduced(d))
     # В предпросмотре показываем текст как его увидит клиент — без HTML-разметки
     plain = [html_lib.unescape(re.sub(r"<[^>]+>", "", p)) for p in parts]
     return {

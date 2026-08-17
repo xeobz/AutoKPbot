@@ -135,7 +135,9 @@ CONTACT  = "@Aleksandr_Montaro"
     BRAND_AWAIT_EMOJI,   # 26 — эмодзи марок: сам премиум-эмодзи
     PHOTO_CHOICE,        # 27 — выбрать фото в мини-аппе или автоподбором
     ASK_VAT_MANUAL,      # 28 — НДС: свой процент
-) = range(29)
+    ASK_UTIL_CHOICE,     # 29 — утиль: льготный или свой (Культ40 + МСК)
+    ASK_UTIL_MANUAL,     # 30 — утиль: ввод суммы
+) = range(31)
 
 # Адрес мини-аппа (https). Пусто — бот работает по-старому, без веба.
 WEB_APP_URL = os.getenv("WEB_APP_URL", "").rstrip("/")
@@ -263,16 +265,18 @@ def _history_edit_kb(direction: str = "minsk") -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ Эвакуатор ₽",   callback_data="hedit:evacuator_rub"),
              InlineKeyboardButton("✏️ Таможня ТКС ₽", callback_data="hedit:customs_tks_rub")],
-            [InlineKeyboardButton("✏️ Выкуп %",       callback_data="hedit:buyback_pct"),
-             InlineKeyboardButton("✏️ Контрагент",    callback_data="hedit:counterparty")],
+            [InlineKeyboardButton("✏️ Утиль ₽",       callback_data="hedit:util_rub"),
+             InlineKeyboardButton("✏️ Выкуп %",       callback_data="hedit:buyback_pct")],
+            [InlineKeyboardButton("✏️ Контрагент",    callback_data="hedit:counterparty")],
             [InlineKeyboardButton("📄 Сгенерировать КП", callback_data="hedit:gen_kp")],
             [InlineKeyboardButton("⬅️ К списку",      callback_data="hist:back")],
         ])
     if direction == "msk":
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ Таможня ТКС ₽", callback_data="hedit:customs_tks_rub"),
-             InlineKeyboardButton("✏️ Выкуп %",       callback_data="hedit:buyback_pct")],
-            [InlineKeyboardButton("✏️ Контрагент",    callback_data="hedit:counterparty")],
+             InlineKeyboardButton("✏️ Утиль ₽",       callback_data="hedit:util_rub")],
+            [InlineKeyboardButton("✏️ Выкуп %",       callback_data="hedit:buyback_pct"),
+             InlineKeyboardButton("✏️ Контрагент",    callback_data="hedit:counterparty")],
             [InlineKeyboardButton("📄 Сгенерировать КП", callback_data="hedit:gen_kp")],
             [InlineKeyboardButton("⬅️ К списку",      callback_data="hist:back")],
         ])
@@ -751,25 +755,78 @@ async def receive_evacuator(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def receive_customs_tks(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """ASK_CUSTOMS_TKS — Таможня ТКС for Культ40 and МСК, then confirm."""
+    """ASK_CUSTOMS_TKS — Таможня ТКС for Культ40 and МСК, then утиль."""
     val = _parse_number((update.message.text or "").strip())
     if val is None:
         await update.message.reply_text("Введите число (руб.), например: 500000")
         return ASK_CUSTOMS_TKS
 
     ctx.user_data["customs_tks_rub"] = val
-    d  = ctx.user_data
+    return await _ask_util(update.message.reply_text, ctx, f"✅ Таможня ТКС: {fmt_rub(val)}")
+
+
+# ── Утильсбор: льготный или свой ─────────────────────────────────────────────
+
+async def _ask_util(reply, ctx: ContextTypes.DEFAULT_TYPE, done: str) -> int:
+    """
+    Экран утиля. Льготный положен не всякой машине, поэтому спрашиваем,
+    а не подставляем молча.
+    """
+    reduced = get_float("util_fixed_rub", 5200)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"♻️ Льготный — {fmt_rub(reduced)}", callback_data="util:fixed")],
+        [InlineKeyboardButton("✏️ Ввести сумму", callback_data="util:custom")],
+    ])
+    await reply(
+        f"{done}\n\nВыберите <b>утильсбор</b>:",
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
+    return ASK_UTIL_CHOICE
+
+
+async def _after_util(reply, ctx: ContextTypes.DEFAULT_TYPE, val: float) -> int:
+    """Утиль выбран — показываем карточку расчёта."""
+    ctx.user_data["util_rub"] = val
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Записать в таблицу", callback_data="confirm:yes"),
         InlineKeyboardButton("✏️ Начать заново",      callback_data="confirm:no"),
     ]])
-    await update.message.reply_text(
-        _build_card(d),
+    await reply(
+        _build_card(ctx.user_data),
         reply_markup=kb,
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
     return CONFIRM
+
+
+async def receive_util_choice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """ASK_UTIL_CHOICE — кнопки «льготный» и «ввести»."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "util:custom":
+        await query.edit_message_text(
+            "Введите <b>сумму утильсбора</b> (руб.).\n"
+            "<i>Например: 3 400 или 844 800</i>",
+            parse_mode="HTML",
+        )
+        return ASK_UTIL_MANUAL
+
+    reduced = get_float("util_fixed_rub", 5200)
+    await query.edit_message_reply_markup(reply_markup=None)
+    return await _after_util(query.message.reply_text, ctx, reduced)
+
+
+async def receive_util_manual(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """ASK_UTIL_MANUAL — своя сумма утиля."""
+    val = _parse_number((update.message.text or "").strip())
+    if val is None or val < 0:
+        await update.message.reply_text("Введите число (руб.), например: 844800")
+        return ASK_UTIL_MANUAL
+
+    return await _after_util(update.message.reply_text, ctx, val)
 
 
 # ── Step 5: customs ───────────────────────────────────────────────────────────
@@ -2005,6 +2062,12 @@ def build_application(token: str):
             ],
             ASK_UTIL: [
                 MessageHandler(_text, receive_util),
+            ],
+            ASK_UTIL_CHOICE: [
+                CallbackQueryHandler(receive_util_choice, pattern=r"^util:"),
+            ],
+            ASK_UTIL_MANUAL: [
+                MessageHandler(_text, receive_util_manual),
             ],
             ASK_EVACUATOR: [
                 MessageHandler(_text, receive_evacuator),

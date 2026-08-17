@@ -41,6 +41,9 @@ PRICE_FOOTERS = {
     "kult40": "под ключ в МСК (включая прямую таможню и льготный утиль)",
     "msk":    "под ключ в МСК (включая прямую таможню и льготный утиль)",
 }
+# Льготный утиль положен не всякой машине. Если менеджер назначил свою сумму,
+# обещать клиенту льготу в подписи нельзя
+FULL_UTIL_FOOTER = "под ключ в МСК (включая прямую таможню и утиль)"
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -158,6 +161,7 @@ def build_kp_parts(
     price_emoji_id: str | None = None,
     header_emoji_id: str | None = None,
     header_emoji_fallback: str = "🇪🇺",
+    util_reduced: bool = True,
 ) -> list[str]:
     """
     Собирает КП. Обычно это одно сообщение — подпись к фото.
@@ -171,6 +175,8 @@ def build_kp_parts(
     title = html.escape(car_title(d))
     specs = build_specs_line(d)
     footer = PRICE_FOOTERS.get(direction, PRICE_FOOTERS["minsk"])
+    if direction in ("kult40", "msk") and not util_reduced:
+        footer = FULL_UTIL_FOOTER
 
     car_line = f"{_emoji_tag(brand_emoji_id, brand_emoji_fallback)} {title}"
     price_line = f"{_emoji_tag(price_emoji_id, '💸')}{fmt_price_rub(total_rub)}"

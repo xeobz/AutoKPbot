@@ -57,6 +57,24 @@ def tariffs_for(d: dict) -> dict:
     return current
 
 
+def util_fee(d: dict, tf: dict | None = None) -> float:
+    """
+    Утильсбор для Культ40 и МСК: сумма, названная менеджером, иначе льготный
+    из настроек. Льготный положен не всякой машине, поэтому его нельзя считать
+    молча — но старые записи в истории сохранялись без этого поля, и для них
+    остаётся прежнее значение.
+    """
+    tf = tf or tariffs_for(d)
+    val = d.get("util_rub") or 0
+    return float(val) if val else float(tf["util_fixed_rub"])
+
+
+def util_is_reduced(d: dict, tf: dict | None = None) -> bool:
+    """Льготный ли утиль — от этого зависит подпись под ценой в КП."""
+    tf = tf or tariffs_for(d)
+    return util_fee(d, tf) == float(tf["util_fixed_rub"])
+
+
 def default_logistics(direction: str, tf: dict | None = None) -> float:
     tf = tf or get_tariffs()
     return {
@@ -178,7 +196,7 @@ def calc_v2(d: dict) -> dict:
     q   = tf["broker_rub"]                    # Q — Брокер
     r   = d.get("evacuator_rub", 0) or 0      # R — Эвакуатор (Культ40)
     s   = d.get("customs_tks_rub", 0) or 0    # S (Культ40) / R (МСК) — Таможня ТКС
-    t   = tf["util_fixed_rub"]                # T (Культ40) / S (МСК) — Утиль
+    t   = util_fee(d, tf)                     # T (Культ40) / S (МСК) — Утиль
     v   = p + q + r + s + t if direction == "kult40" else p + q + s + t
     return dict(f=f, vat=vat, g=g, j=j, k=k, l=l_, l_t=l_t,
                 m=m, n=n, o=o, p=p, q=q, r=r, s=s, t=t, v=v)
@@ -234,18 +252,21 @@ def card_rows(d: dict) -> list[dict]:
             _SEP,
             _row("🏢 Брокер (Q)",        fmt_rub(c["q"]),   group="Расходы в России"),
         ]
+        # Видно, льготный утиль или назначенный менеджером — цифры одинаковой
+        # величины, а разница для клиента принципиальная
+        util = fmt_rub(c["t"]) + ("" if util_is_reduced(d) else " (свой)")
         if direction == "kult40":
             rows += [
                 _row("🚛 Эвакуатор СПБ-МСК (R)", fmt_rub(c["r"]) if c["r"] else "⏳ не указан"),
                 _row("🛃 Таможня ТКС (S)",       fmt_rub(c["s"]) if c["s"] else "⏳ не указана"),
-                _row("♻️ Утиль (T)",             fmt_rub(c["t"])),
+                _row("♻️ Утиль (T)",             util),
                 _SEP,
                 _row("✅ Итого (U)",             fmt_rub(c["v"]), role="total"),
             ]
         else:
             rows += [
                 _row("🛃 Таможня ТКС (R)", fmt_rub(c["s"]) if c["s"] else "⏳ не указана"),
-                _row("♻️ Утиль (S)",       fmt_rub(c["t"])),
+                _row("♻️ Утиль (S)",       util),
                 _SEP,
                 _row("✅ Итого (T)",       fmt_rub(c["v"]), role="total"),
             ]

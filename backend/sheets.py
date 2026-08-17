@@ -11,6 +11,7 @@ from pathlib import Path
 import gspread
 from dotenv import load_dotenv
 
+from calc import util_fee
 from storage import get_tariffs
 
 log = logging.getLogger(__name__)
@@ -241,7 +242,7 @@ def append_kult40_row(data: dict) -> tuple[int, int]:
             {"range": f"Q{r}", "values": [[t["broker_rub"]]]},                   # Брокер
             {"range": f"R{r}", "values": [[data.get("evacuator_rub", 0) or 0]]}, # Эвакуатор
             {"range": f"S{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]}, # Таможня ТКС
-            {"range": f"T{r}", "values": [[t["util_fixed_rub"]]]},               # Утиль
+            {"range": f"T{r}", "values": [[util_fee(data, t)]]},                 # Утиль
             {"range": f"U{r}", "values": [[f"=P{r}+Q{r}+R{r}+S{r}+T{r}"]]},    # Итого
         ],
         value_input_option="USER_ENTERED",
@@ -280,7 +281,7 @@ def append_msk_row(data: dict) -> tuple[int, int]:
             {"range": f"P{r}", "values": [[f"=N{r}*O{r}"]]},
             {"range": f"Q{r}", "values": [[t["broker_rub"]]]},                     # Брокер
             {"range": f"R{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]}, # Таможня ТКС
-            {"range": f"S{r}", "values": [[t["util_fixed_rub"]]]},                 # Утиль
+            {"range": f"S{r}", "values": [[util_fee(data, t)]]},                   # Утиль
             {"range": f"T{r}", "values": [[f"=P{r}+Q{r}+R{r}+S{r}"]]},           # Итого
         ],
         value_input_option="USER_ENTERED",
@@ -299,6 +300,7 @@ def update_kult40_row(sheet_row: int, data: dict) -> None:
             {"range": f"J{r}", "values": [[_buyback_cell(data, f"G{r}")]]},
             {"range": f"R{r}", "values": [[data.get("evacuator_rub", 0) or 0]]},
             {"range": f"S{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]},
+            {"range": f"T{r}", "values": [[util_fee(data)]]},
         ],
         value_input_option="USER_ENTERED",
     )
@@ -314,6 +316,7 @@ def update_msk_row(sheet_row: int, data: dict) -> None:
             {"range": f"H{r}", "values": [[data.get("vat", 1.19)]]},
             {"range": f"J{r}", "values": [[_buyback_cell(data, f"G{r}")]]},
             {"range": f"R{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]},
+            {"range": f"S{r}", "values": [[util_fee(data)]]},
         ],
         value_input_option="USER_ENTERED",
     )

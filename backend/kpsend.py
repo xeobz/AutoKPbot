@@ -6,7 +6,7 @@ import logging
 from telegram import InputMediaPhoto
 
 from ai import build_options
-from calc import total_rub
+from calc import total_rub, util_is_reduced
 from kp import brand_candidates, build_kp_parts
 from storage import get_brand_emoji, get_float, get_optional
 
@@ -74,6 +74,9 @@ async def build_captions(
     header_emoji_id = get_optional("header_emoji_id")
     header_fallback = get_optional("header_emoji") or "🇪🇺"
 
+    # Льготный утиль положен не всякой машине — от этого зависит подпись под ценой
+    reduced = util_is_reduced(d)
+
     with_emoji = build_kp_parts(
         d, total, options, car_num, contact,
         brand_emoji_id=(rec or {}).get("custom_emoji_id"),
@@ -81,11 +84,13 @@ async def build_captions(
         price_emoji_id=price_emoji_id,
         header_emoji_id=header_emoji_id,
         header_emoji_fallback=header_fallback,
+        util_reduced=reduced,
     )
     plain = build_kp_parts(
         d, total, options, car_num, contact,
         brand_emoji_fallback=fallback,
         header_emoji_fallback=header_fallback,
+        util_reduced=reduced,
     )
     return with_emoji, plain
 
