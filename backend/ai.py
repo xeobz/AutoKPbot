@@ -332,6 +332,98 @@ def _sources(d: dict) -> tuple[list[str], str]:
     return features, description
 
 
+_MERGE_PROMPT = """Тебе дают готовый список комплектации автомобиля для
+коммерческого предложения. В нём есть пары строк про одно и то же: они
+пришли из разных мест объявления и написаны разными словами. Например:
+«Обогрев лобового стекла» и «Ветровое стекло с подогревом», «Руль
+с подогревом» и «Подогрев рулевого колеса», «Люк в крыше» и «Сдвижной люк».
+
+Верни тот же список без повторов: из каждой такой пары оставь ОДНУ строку —
+ту, что понятнее покупателю. Если в паре одна строка с фирменным названием
+(KEYLESS-GO, MULTIBEAM LED, Burmester, MBUX, DISTRONIC), оставляй её:
+для покупателя это признак дорогой комплектации.
+Все остальные строки верни слово в слово.
+
+Ничего не добавляй, не переписывай и не сокращай. Разные опции похожими
+не считай: «Спортивный пакет» и «Спортивная подвеска», «Подогрев сидений»
+и «Вентиляция сидений» — разные строки, обе нужны.
+Только строки списка, по одной в строке, без нумерации и пояснений."""
+
+
+async def _merge_synonyms(options: list[str], api_key: str) -> list[str]:
+    """
+    Убирает пары про одно и то же, пришедшие из чек-листа и из описания.
+
+    Сверять их кодом бесполезно: «Обогрев лобового стекла» и «Ветровое стекло
+    с подогревом» не пересекаются ни одним словом. Поэтому спрашиваем модель,
+    но принимаем только те строки, которые уже были в списке, — так этот
+    заход может лишь удалять, а дописать что-то от себя не может.
+    """
+    if len(options) < 12:
+        return options
+
+    answer = await _ask(_MERGE_PROMPT, "\n".join(options), api_key, reasoning=512)
+    if not answer:
+        return options
+
+    allowed = {_norm(o): o for o in options}
+    kept: list[str] = []
+    seen: set[str] = set()
+    for line in answer.splitlines():
+        key = _norm(_clean_name(line))
+        if key in allowed and key not in seen:
+            seen.add(key)
+            kept.append(allowed[key])
+
+    if len(kept) < len(options) * 0.6:      # порезала слишком много — не верим
+        log.warning("Склейка повторов вернула %s строк из %s — оставляю как было",
+                    len(kept), len(options))
+        return options
+    return kept
+
+
+async def _ask(system: str, user: str, api_key: str, reasoning: int = 1024) -> str:
+    """
+    Запрос к модели. Разовая ошибка сети или 429 не должна тихо превращать
+    КП в сырой чек-лист — пробуем дважды и пишем причину в журнал.
+    """
+    for attempt in (1, 2):
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(
+                    OPENROUTER_URL,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://localhost",
+                        "X-Title": "AutoKP Generator",
+                    },
+                    json={
+                        "model": MODEL,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                        "temperature": 0.1,
+                        # Без рассуждения модель скользит по длинному описанию
+                        # и теряет строки: на живом Mercedes 4 попадания из 7
+                        # против 7 из 7. Тысячи токенов хватает, больше не даёт
+                        # ничего. Модели без этого режима параметр игнорируют.
+                        "reasoning": {"max_tokens": reasoning},
+                    },
+                )
+                resp.raise_for_status()
+                answer = resp.json()["choices"][0]["message"]["content"].strip()
+            if answer:
+                return answer
+            log.warning("ИИ вернул пустой ответ (попытка %s из 2)", attempt)
+        except Exception as exc:
+            log.warning("ИИ не ответил (попытка %s из 2): %s", attempt, exc)
+        if attempt == 1:
+            await asyncio.sleep(2)
+    return ""
+
+
 async def build_options(d: dict) -> list[str]:
     """
     Комплектация для КП. Если ИИ недоступен или ответил невнятно, отдаём
@@ -358,44 +450,7 @@ async def build_options(d: dict) -> list[str]:
         parts.append("Описание продавца:\n" + description)
     user_prompt = "\n\n".join(parts)
 
-    # Разовая ошибка сети или 429 не должна тихо превращать КП в сырой
-    # чек-лист — пробуем дважды и в любом случае пишем причину в журнал
-    answer = ""
-    for attempt in (1, 2):
-        try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(
-                    OPENROUTER_URL,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://localhost",
-                        "X-Title": "AutoKP Generator",
-                    },
-                    json={
-                        "model": MODEL,
-                        "messages": [
-                            {"role": "system", "content": _SYSTEM_PROMPT},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "temperature": 0.1,
-                        # Без рассуждения модель скользит по длинному описанию
-                        # и теряет строки: на живом Mercedes 4 попадания из 7
-                        # против 7 из 7. Тысячи токенов хватает, больше не даёт
-                        # ничего. Модели без этого режима параметр игнорируют.
-                        "reasoning": {"max_tokens": 1024},
-                    },
-                )
-                resp.raise_for_status()
-                answer = resp.json()["choices"][0]["message"]["content"].strip()
-            if answer:
-                break
-            log.warning("ИИ вернул пустой ответ (попытка %s из 2)", attempt)
-        except Exception as exc:
-            log.warning("ИИ не ответил (попытка %s из 2): %s", attempt, exc)
-        if attempt == 1:
-            await asyncio.sleep(2)
-
+    answer = await _ask(_SYSTEM_PROMPT, user_prompt, api_key)
     if not answer:
         log.error("Комплектация собрана без ИИ: в КП уйдёт список оборудования как есть")
         return features
@@ -408,4 +463,6 @@ async def build_options(d: dict) -> list[str]:
         )
         return features
 
-    return sorted(_add_missing(options, features, quotes), key=_sort_key)
+    options = _add_missing(options, features, quotes)
+    options = await _merge_synonyms(options, api_key)
+    return sorted(options, key=_sort_key)
