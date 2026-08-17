@@ -241,9 +241,31 @@ def _shorten(name: str) -> str:
     return short if len(short) >= 12 else name
 
 
+# Римские цифры в названиях версий: «Night пакет II»
+_ROMAN = {"ii", "iii", "iv", "vi", "vii", "viii", "ix", "xi", "xii"}
+
+
 def _key_words(text: str) -> set[str]:
-    """Огрубленные слова строки — по ним ищем повторы формулировок."""
-    return {w[:4] for w in _norm(text).split() if len(w) >= 3}
+    """
+    Огрубленные слова строки — по ним ищем повторы формулировок.
+
+    Числа и римские цифры считаем словами независимо от длины: «Night пакет»
+    и «Night пакет II» — разные опции, как и 19- и 20-дюймовые диски,
+    а по одним буквам они неразличимы.
+    """
+    return {w[:4] for w in _norm(text).split()
+            if len(w) >= 3 or w.isdigit() or w in _ROMAN}
+
+
+def _versions(text: str) -> set[str]:
+    """
+    Числа и римские цифры строки.
+
+    Ими различаются соседние опции одного семейства: «Night пакет» и «Night
+    пакет II», диски 19 и 20 дюймов. Всё остальное в них совпадает, поэтому
+    без этой проверки склейка оставила бы одну строку из двух.
+    """
+    return {w for w in _norm(text).split() if w.isdigit() or w in _ROMAN}
 
 
 def _dedupe(options: list[str]) -> list[str]:
@@ -257,16 +279,18 @@ def _dedupe(options: list[str]) -> list[str]:
     совпадения по большинству слов — они различаются уточнениями.
     """
     kept: list[str] = []
-    kept_words: list[set[str]] = []
+    seen: list[tuple[set[str], set[str]]] = []
     for opt in sorted(options, key=len, reverse=True):
         words = _key_words(opt)
         if not words:
             continue
         need = len(words) if len(words) <= 3 else round(len(words) * 0.6)
-        if any(len(words & prev) >= need for prev in kept_words):
+        vers = _versions(opt)
+        if any(len(words & prev) >= need and vers == prev_vers
+               for prev, prev_vers in seen):
             continue
         kept.append(opt)
-        kept_words.append(words)
+        seen.append((words, vers))
     return kept
 
 
@@ -284,16 +308,18 @@ def _add_missing(options: list[str], features: list[str], quotes: list[str]) -> 
     """
     quoted = " | ".join(_norm(q) for q in quotes)
     out = list(options)
-    seen_words = [_key_words(o) for o in options]
+    seen = [(_key_words(o), _versions(o)) for o in options]
     for f in features:
         words = _key_words(f)
         if not words or _norm(f) in quoted:
             continue
         need = len(words) if len(words) <= 3 else round(len(words) * 0.6)
-        if any(len(words & prev) >= need for prev in seen_words):
+        vers = _versions(f)
+        if any(len(words & prev) >= need and vers == prev_vers
+               for prev, prev_vers in seen):
             continue
         out.append(f)
-        seen_words.append(words)
+        seen.append((words, vers))
     return out
 
 
@@ -502,7 +528,12 @@ async def build_options(d: dict) -> list[str]:
     features, description = _sources(d)
     if not features and not description:
         return []
+    if not description:
+        # Записи из истории и старые черновики сохранялись до того, как парсер
+        # научился брать описание: там будет только чек-лист, и это видно сразу
+        log.warning("У объявления нет описания продавца — комплектация из чек-листа")
 
+    d["kp_options_source"] = "checklist"
     api_key = os.getenv("OPENROUTER_API_KEY", "")
     if not api_key:
         return features
@@ -515,19 +546,29 @@ async def build_options(d: dict) -> list[str]:
     user_prompt = "\n\n".join(parts)
 
     started = time.monotonic()
-    answer = await _ask(_SYSTEM_PROMPT, user_prompt, api_key)
-    if not answer:
+    source = _norm(user_prompt)
+
+    # Модель изредка отвечает одной строкой вместо полутора сотен. Одна такая
+    # осечка не должна превращать КП в сырой чек-лист — просим ещё раз.
+    options: list[str] = []
+    quotes: list[str] = []
+    for attempt in (1, 2):
+        answer = await _ask(_SYSTEM_PROMPT, user_prompt, api_key)
+        if not answer:
+            break
+        options, quotes = _parse_answer(answer, source)
+        if len(options) >= 5:
+            break
+        log.warning(
+            "Заход %s: разобрано %s строк из %s. Начало ответа: %.200s",
+            attempt, len(options), len(answer.splitlines()), answer.replace("\n", " ⏎ "),
+        )
+
+    if len(options) < 5:
         log.error("Комплектация собрана без ИИ: в КП уйдёт список оборудования как есть")
         return features
 
-    options, quotes = _parse_answer(answer, _norm(user_prompt))
-    if len(options) < 5:
-        log.error(
-            "ИИ вернул %s строк комплектации из %s — в КП уйдёт список оборудования",
-            len(options), len(answer.splitlines()),
-        )
-        return features
-
+    d["kp_options_source"] = "ai"
     options = _add_missing(options, features, quotes)
     # Склейка повторов — необязательная косметика. Если первый заход и так
     # тянулся, второго менеджер ждать не должен: КП уйдёт с парой повторов,

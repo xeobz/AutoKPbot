@@ -354,7 +354,9 @@ async def preview(req: PreviewReq, user: dict = Depends(current_user)):
     # Разбор описания моделью — самое долгое место. Кладём результат в черновик:
     # отправка не считает то же самое второй раз, а клиент получает ровно тот
     # текст, который менеджер видел в предпросмотре.
-    if options:
+    # Запасной список (ИИ не ответил) не запоминаем: иначе одна осечка залипнет
+    # в черновике, и повторная отправка выдаст тот же голый чек-лист.
+    if options and d.get("kp_options_source") == "ai":
         rec["data"]["kp_options"] = options
         save_draft(req.draft_id, rec["user_id"], rec["chat_id"], rec["data"])
 
