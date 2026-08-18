@@ -7,7 +7,10 @@
 <title>Montaro — расчёт и КП</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23c8912f'/%3E%3Cpath d='M8 23V9h3.6l4.4 8 4.4-8H24v14h-3.2v-8.4L16.9 21h-1.8l-3.9-6.4V23z' fill='%23151a20'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="styles.css?v=2">
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<!-- defer: без него разбор страницы встаёт на этом скрипте, и если
+     telegram.org у клиента недоступен, экран остаётся пустым.
+     Порядок сохраняется: defer и модули выполняются по порядку в документе -->
+<script defer src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
 
