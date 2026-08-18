@@ -20,6 +20,8 @@ import time
 
 import httpx
 
+from storage import get_exclude_words
+
 log = logging.getLogger("autokp.ai")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -64,7 +66,22 @@ _LOW_VALUE = (
     "датчик освещенности", "ручное переключение передач",
 )
 
-_SYSTEM_PROMPT = f"""Ты извлекаешь комплектацию автомобиля из объявления
+def _system_prompt() -> str:
+    """
+    Промт со стоп-словами из настроек: список правится на ходу, поэтому
+    собираем его при каждом обращении, а не при загрузке модуля.
+    """
+    stops = get_exclude_words()
+    if not stops:
+        return _PROMPT_BASE
+    return _PROMPT_BASE + (
+        "\n\nОтдельно: не выводи перечисленное ниже, даже если оно есть"
+        "\nв объявлении — это есть у любой машины и в КП только мешает:\n"
+        + ", ".join(stops)
+    )
+
+
+_PROMPT_BASE = f"""Ты извлекаешь комплектацию автомобиля из объявления
 и переводишь её на русский для публикации в Telegram. Объявление приходит
 на немецком, французском, английском или русском языке.
 
@@ -147,13 +164,31 @@ def _is_service(text: str) -> bool:
     return any(s in low for s in _SERVICES)
 
 
+def _is_excluded(text: str, stops: list[str]) -> bool:
+    """
+    Есть ли в строке стоп-слово из настроек. Короткие сокращения (ABS, ESP)
+    сверяем целым словом, иначе «ABS» поймает «Abstandsregelung»; длинные —
+    подстрокой, чтобы ловились падежи.
+    """
+    low = text.lower()
+    for w in stops:
+        w = w.lower()
+        if len(w) <= 4:
+            if re.search(rf"(?<![^\W\d_]){re.escape(w)}(?![^\W\d_])", low):
+                return True
+        elif w in low:
+            return True
+    return False
+
+
 def _is_low_value(text: str) -> bool:
     low = text.lower()
     return any(b in low for b in _LOW_VALUE)
 
 
 def _prepare(features: list[str]) -> list[str]:
-    """Чистим дубли и услуги дилера, базовое опускаем в конец."""
+    """Чистим дубли, услуги дилера и стоп-слова, базовое опускаем в конец."""
+    stops = get_exclude_words()
     seen: set[str] = set()
     valuable: list[str] = []
     basic: list[str] = []
@@ -163,7 +198,7 @@ def _prepare(features: list[str]) -> list[str]:
         if not clean or len(clean) > 90:
             continue
         low = clean.lower()
-        if low in seen or _is_service(clean):
+        if low in seen or _is_service(clean) or _is_excluded(clean, stops):
             continue
         seen.add(low)
         (basic if _is_low_value(clean) else valuable).append(clean)
@@ -553,7 +588,7 @@ async def build_options(d: dict) -> list[str]:
     options: list[str] = []
     quotes: list[str] = []
     for attempt in (1, 2):
-        answer = await _ask(_SYSTEM_PROMPT, user_prompt, api_key)
+        answer = await _ask(_system_prompt(), user_prompt, api_key)
         if not answer:
             break
         options, quotes = _parse_answer(answer, source)
@@ -569,6 +604,9 @@ async def build_options(d: dict) -> list[str]:
         return features
 
     d["kp_options_source"] = "ai"
+    # Стоп-слова ловим и в ответе: описание продавца приносит их не меньше
+    stops = get_exclude_words()
+    options = [o for o in options if not _is_excluded(o, stops)]
     options = _add_missing(options, features, quotes)
     # Склейка повторов — необязательная косметика. Если первый заход и так
     # тянулся, второго менеджер ждать не должен: КП уйдёт с парой повторов,

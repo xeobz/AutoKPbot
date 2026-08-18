@@ -134,6 +134,7 @@ function detailScreen() {
     dirKeys.push('util_rub');
   }
   // Курс правится у любого направления: он меняется по нескольку раз в день
+  if (!dirKeys.includes('rate_eur_usdt')) dirKeys.push('rate_eur_usdt');
   if (!dirKeys.includes('rate_usdt_rub')) dirKeys.push('rate_usdt_rub');
   const bb = normBuyback(st.edits.buyback !== undefined ? st.edits.buyback : data.buyback);
 

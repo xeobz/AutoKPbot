@@ -2,6 +2,7 @@
 SQLite storage for bot settings and pending (incomplete) car requests.
 """
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -31,6 +32,12 @@ _DEFAULTS = {
     "invoice_fix":      "100",     # € фикс. часть инвойса
     "extra_fix":        "350",     # € прочие расходы
     "buyback_min_eur":  "2500",    # € минимальный выкуп
+    # ── комплектация ──────────────────────────────────────────────────────────
+    # Строки, которые не нужны клиенту в КП: они есть у любой машины и только
+    # занимают место. Список правится в настройках, разделитель — запятая.
+    "kp_exclude": "ABS, ESP, ISOFIX, иммобилайзер, гарантия, центральный замок, "
+                  "бортовой компьютер, подушки безопасности, подушка безопасности, "
+                  "усилитель руля, противобуксовочная",
     # ── фото ──────────────────────────────────────────────────────────────────
     "img_offset":       "0",       # пропустить первых N фото
     "img_count":        "6",       # сколько фото в КП
@@ -71,6 +78,7 @@ EDITABLE_SETTINGS = {
     "invoice_fix":      ("Инвойс, фикс. часть",        "€",  "tariffs"),
     "extra_fix":        ("Прочие расходы",             "€",  "tariffs"),
     "buyback_min_eur":  ("Минимальный выкуп",          "€",  "tariffs"),
+    "kp_exclude":       ("Стоп-слова комплектации",     "",   "kp", "text"),
     "img_count":        ("Сколько фото в КП",          "шт", "photo"),
     "img_step":         ("Шаг выборки фото",           "",   "photo"),
     "img_offset":       ("Пропустить первых фото",     "шт", "photo"),
@@ -79,6 +87,7 @@ EDITABLE_SETTINGS = {
 SECTION_TITLES = {
     "rates":   "Курс дня",
     "tariffs": "Тарифы",
+    "kp":      "Комплектация",
     "photo":   "Фото",
 }
 
@@ -294,6 +303,21 @@ def rates_are_fresh(today: str) -> bool:
 
 
 # ── Тарифы ────────────────────────────────────────────────────────────────────
+
+def setting_kind(key: str) -> str:
+    """Тип значения настройки: number (по умолчанию) или text."""
+    item = EDITABLE_SETTINGS.get(key)
+    return item[3] if item and len(item) > 3 else "number"
+
+
+def get_exclude_words() -> list[str]:
+    """
+    Стоп-слова комплектации. Опция с таким словом в КП не попадает:
+    «иммобилайзер» и «ABS» есть у любой машины и только занимают место.
+    """
+    raw = get_setting("kp_exclude") or ""
+    return [w.strip() for w in re.split(r"[,;\n]", raw) if w.strip()]
+
 
 def get_tariffs() -> dict:
     return {

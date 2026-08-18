@@ -164,12 +164,20 @@ function settingItem(item) {
   return h('div', { class: 'field' },
     h('span', { class: 'field-label', text: item.unit ? `${item.label}, ${item.unit}` : item.label }),
     h('div', { class: 'row' },
-      h('input', {
-        class: 'input num grow', type: 'text', inputmode: 'decimal',
-        value: st.values[item.key] ?? '',
-        'data-focus-key': `set-${item.key}`,
-        oninput: (e) => { st.values[item.key] = e.target.value; render(); },
-      }),
+      item.kind === 'text'
+        // Стоп-слова — список через запятую, ему нужна многострочная строка
+        ? h('textarea', {
+          class: 'input grow', rows: '3', style: { minHeight: '76px', resize: 'vertical' },
+          value: st.values[item.key] ?? '',
+          'data-focus-key': `set-${item.key}`,
+          oninput: (e) => { st.values[item.key] = e.target.value; render(); },
+        })
+        : h('input', {
+          class: 'input num grow', type: 'text', inputmode: 'decimal',
+          value: st.values[item.key] ?? '',
+          'data-focus-key': `set-${item.key}`,
+          oninput: (e) => { st.values[item.key] = e.target.value; render(); },
+        }),
       h('button', {
         class: 'btn btn-sm', type: 'button', style: { minHeight: '44px' },
         text: saving ? '…' : 'Сохранить',

@@ -61,6 +61,7 @@ from storage import (
     get_history_for_user,
     get_rates,
     get_setting,
+    setting_kind,
     get_tariffs,
     init_db,
     save_draft,
@@ -198,7 +199,7 @@ class PhotosReq(BaseModel):
 
 class SettingReq(BaseModel):
     key: str
-    value: float
+    value: str | float      # число у тарифов, текст у стоп-слов
 
 
 class RatesReq(BaseModel):
@@ -585,9 +586,11 @@ async def draft_photos(draft_id: str, req: PhotosReq, user: dict = Depends(curre
 @api.get("/settings")
 async def settings_get(user: dict = Depends(admin_user)):
     sections: dict[str, list] = {}
-    for key, (label, unit, section) in EDITABLE_SETTINGS.items():
+    for key, item in EDITABLE_SETTINGS.items():
+        label, unit, section = item[0], item[1], item[2]
         sections.setdefault(section, []).append({
-            "key": key, "label": label, "unit": unit, "value": get_setting(key),
+            "key": key, "label": label, "unit": unit,
+            "kind": setting_kind(key), "value": get_setting(key),
         })
     return {
         "sections": [
@@ -604,6 +607,15 @@ async def settings_set(req: SettingReq, user: dict = Depends(admin_user)):
         raise HTTPException(400, "Неизвестная настройка")
 
     value = req.value
+    if setting_kind(req.key) == "text":
+        # Стоп-слова: текст как есть, число тут не при чём
+        set_setting(req.key, str(value).strip())
+        return {"key": req.key, "value": str(value).strip()}
+
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Значение должно быть числом")
     if req.key in ("img_count", "img_step", "img_offset"):
         value = max(0, int(value))
         if req.key in ("img_count", "img_step"):

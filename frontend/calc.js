@@ -32,6 +32,7 @@ export const FIELD_LABELS = {
   util_rub: 'Утиль, ₽',
   customs_tks_rub: 'Таможня ТКС, ₽',
   evacuator_rub: 'Эвакуатор СПБ-МСК, ₽',
+  rate_eur_usdt: 'Кросс-курс EUR→USDT',
   rate_usdt_rub: 'Курс USDT→₽',
 };
 

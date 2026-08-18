@@ -69,6 +69,7 @@ from storage import (
     get_all_brand_emoji,
     get_brand_emoji,
     get_float,
+    setting_kind,
     get_optional,
     get_history_by_id,
     get_history_for_user,
@@ -272,6 +273,8 @@ def _history_edit_kb(direction: str = "minsk") -> InlineKeyboardMarkup:
             [InlineKeyboardButton("✏️ Утиль ₽",       callback_data="hedit:util_rub"),
              InlineKeyboardButton("✏️ Выкуп %",       callback_data="hedit:buyback_pct")],
             [InlineKeyboardButton("📈 Курс USDT→₽",   callback_data="hedit:rate_usdt_rub"),
+             InlineKeyboardButton("📈 Кросс EUR→USDT", callback_data="hedit:rate_eur_usdt")],
+            [InlineKeyboardButton("✏️ Контрагент",    callback_data="hedit:counterparty"),
              InlineKeyboardButton("✏️ Контрагент",    callback_data="hedit:counterparty")],
             [InlineKeyboardButton("📄 Сгенерировать КП", callback_data="hedit:gen_kp")],
             [InlineKeyboardButton("⬅️ К списку",      callback_data="hist:back")],
@@ -282,7 +285,8 @@ def _history_edit_kb(direction: str = "minsk") -> InlineKeyboardMarkup:
              InlineKeyboardButton("✏️ Утиль ₽",       callback_data="hedit:util_rub")],
             [InlineKeyboardButton("✏️ Выкуп %",       callback_data="hedit:buyback_pct"),
              InlineKeyboardButton("✏️ Контрагент",    callback_data="hedit:counterparty")],
-            [InlineKeyboardButton("📈 Курс USDT→₽",   callback_data="hedit:rate_usdt_rub")],
+            [InlineKeyboardButton("📈 Курс USDT→₽",   callback_data="hedit:rate_usdt_rub"),
+             InlineKeyboardButton("📈 Кросс EUR→USDT", callback_data="hedit:rate_eur_usdt")],
             [InlineKeyboardButton("📄 Сгенерировать КП", callback_data="hedit:gen_kp")],
             [InlineKeyboardButton("⬅️ К списку",      callback_data="hist:back")],
         ])
@@ -292,7 +296,8 @@ def _history_edit_kb(direction: str = "minsk") -> InlineKeyboardMarkup:
          InlineKeyboardButton("✏️ Утиль ₽",     callback_data="hedit:util_rub")],
         [InlineKeyboardButton("✏️ Выкуп %",     callback_data="hedit:buyback_pct"),
          InlineKeyboardButton("✏️ Контрагент",  callback_data="hedit:counterparty")],
-        [InlineKeyboardButton("📈 Курс USDT→₽", callback_data="hedit:rate_usdt_rub")],
+        [InlineKeyboardButton("📈 Курс USDT→₽", callback_data="hedit:rate_usdt_rub"),
+         InlineKeyboardButton("📈 Кросс EUR→USDT", callback_data="hedit:rate_eur_usdt")],
         [InlineKeyboardButton("📄 Сгенерировать КП", callback_data="hedit:gen_kp")],
         [InlineKeyboardButton("⬅️ К списку",    callback_data="hist:back")],
     ])
@@ -1082,6 +1087,7 @@ async def history_edit_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         "buyback_pct":     "процент выкупа (1–30) или сумму в EUR (от 100)",
         "counterparty":    "имя контрагента",
         "rate_usdt_rub":   "курс USDT→₽ (например: 82.09)",
+        "rate_eur_usdt":   "кросс-курс EUR→USDT (например: 1.158)",
     }
     ctx.user_data["_hist_edit_field"] = action
     cancel_kb = InlineKeyboardMarkup([[
@@ -1116,7 +1122,7 @@ async def history_edit_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
 
     # Validate & apply
     if field in ("customs_eur", "util_rub", "evacuator_rub", "customs_tks_rub",
-                 "rate_usdt_rub"):
+                 "rate_usdt_rub", "rate_eur_usdt"):
         val = _parse_number(text)
         if val is None:
             await update.message.reply_text("Введите число:")
@@ -1431,8 +1437,12 @@ async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 def _fmt_setting(key: str) -> str:
-    label, unit, _ = _EDITABLE[key]
+    label, unit = _EDITABLE[key][0], _EDITABLE[key][1]
     val = get_setting(key)
+    if setting_kind(key) == "text":
+        # Список бывает длинным — в обзоре показываем начало
+        short = val if len(val) <= 90 else val[:90].rsplit(",", 1)[0] + ", …"
+        return f"{label}:\n  <i>{short or 'пусто'}</i>"
     try:
         num = float(val)
         val = f"{num:,.0f}".replace(",", " ") if num >= 1000 else f"{num:g}"
@@ -1467,6 +1477,7 @@ async def _show_settings_menu(update_or_query, ctx: ContextTypes.DEFAULT_TYPE) -
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("💱 Изменить курс дня", callback_data="set:rates")],
         [InlineKeyboardButton("📦 Тарифы",            callback_data="set:tariffs")],
+        [InlineKeyboardButton("📝 Комплектация",      callback_data="set:kp")],
         [InlineKeyboardButton("🖼 Фото",              callback_data="set:photo")],
         [InlineKeyboardButton("😀 Эмодзи марок",      callback_data="set:brands")],
         [InlineKeyboardButton("👥 Администраторы",    callback_data="set:admins")],
@@ -1483,9 +1494,11 @@ async def _show_section(update_or_query, section: str) -> int:
         "rates":   ("💱 <b>Курс дня</b>", "Курс единый для всех направлений."),
         "tariffs": ("📦 <b>Тарифы</b>",   "Нажмите на строку, чтобы изменить."),
         "photo":   ("🖼 <b>Фото</b>",     "Шаг 2 — каждое второе фото: так в подборку попадает салон."),
+        "kp":      ("📝 <b>Комплектация</b>",
+                    "Опция с таким словом в КП не попадёт. Через запятую."),
     }
     head, hint = titles.get(section, ("⚙️ <b>Настройки</b>", ""))
-    keys = [k for k, (_, _, sec) in _EDITABLE.items() if sec == section]
+    keys = [k for k, item in _EDITABLE.items() if item[2] == section]
 
     text = head + "\n\n" + "\n".join(f"• {_fmt_setting(k)}" for k in keys) + f"\n\n<i>{hint}</i>"
     rows = [
@@ -1533,12 +1546,14 @@ async def settings_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         skey = parts[2]
         if skey not in _EDITABLE:
             return await _show_settings_menu(query, ctx)
-        label, unit, section = _EDITABLE[skey]
+        label, unit, section = _EDITABLE[skey][0], _EDITABLE[skey][1], _EDITABLE[skey][2]
         ctx.user_data["_setting_key"] = skey
+        hint = ("Пришлите список через запятую — опция с таким словом в КП не попадёт."
+                if setting_kind(skey) == "text" else "Введите новое значение:")
         await query.edit_message_text(
             f"✏️ <b>{label}</b>\n"
             f"Сейчас: <b>{get_setting(skey)}{(' ' + unit) if unit else ''}</b>\n\n"
-            f"Введите новое значение:",
+            f"{hint}",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Отмена", callback_data=f"set:{section}")
@@ -1555,13 +1570,27 @@ async def settings_receive_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Ошибка состояния. Используй /settings заново.")
         return WAIT_URL
 
-    val = _parse_number((update.message.text or "").strip())
+    raw = (update.message.text or "").strip()
+    label, unit, section = _EDITABLE[key][0], _EDITABLE[key][1], _EDITABLE[key][2]
+
+    # Стоп-слова — обычный текст, число тут не подходит
+    if setting_kind(key) == "text":
+        set_setting(key, raw)
+        words = [w.strip() for w in raw.replace("\n", ",").split(",") if w.strip()]
+        await update.message.reply_text(
+            f"✅ <b>{label}</b>: {len(words)} слов\n<i>{raw[:300] or 'пусто'}</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ К настройкам", callback_data=f"set:{section}")
+            ]]),
+        )
+        return SETTINGS_MENU
+
+    val = _parse_number(raw)
     if val is None:
         await update.message.reply_text("Введите число, например: 4900")
         ctx.user_data["_setting_key"] = key
         return SETTINGS_AWAIT_VALUE
-
-    label, unit, section = _EDITABLE[key]
 
     if key in ("img_count", "img_step", "img_offset"):
         val = max(0, int(val))
