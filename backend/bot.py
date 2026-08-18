@@ -546,22 +546,14 @@ async def receive_direction(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     title    = scraped.get("title") or f"{make} {model}".strip()
     car_name = title or f"{make} {model} {year}".strip()
 
+    # Разбор кладём целиком, как это делает мини-апп. Перечисление полей руками
+    # уже стоило нам описания продавца: оно не попадало в промт, и бот собирал
+    # комплектацию из одного чек-листа, а веб — из чек-листа и описания.
+    ctx.user_data.update(scraped)
     ctx.user_data.update({
         "car_name":  car_name,
         "title":     title,
         "price_eur": price,
-        "make":      make,
-        "model":     model,
-        "year":      year,
-        "mileage":   scraped.get("mileage"),
-        "color":     scraped.get("color", ""),
-        "features":  scraped.get("features", []),
-        "photos":    scraped.get("photos", []),
-        "all_photos": scraped.get("all_photos", []),
-        "power_hp":  scraped.get("power_hp"),
-        "engine_l":  scraped.get("engine_l"),
-        "fuel":      scraped.get("fuel", ""),
-        "gearbox":   scraped.get("gearbox", ""),
     })
 
     dir_label = {"minsk": "🏙 ЕС/Минск", "kult40": "🏭 ЕС/Культ40", "msk": "🌆 ЕС-МСК"}.get(direction, direction)
