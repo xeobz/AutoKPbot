@@ -26,8 +26,45 @@
   <span id="topbar-info" class="topbar-info"></span>
 </header>
 
-<!-- Сюда монтируются экраны -->
-<main id="app" class="app"></main>
+<!-- Сюда монтируются экраны. Заглушка нужна до выполнения скриптов:
+     если модули не загрузятся, пользователь увидит причину, а не пустой экран -->
+<main id="app" class="app">
+  <div class="state" id="boot-note">
+    <span class="spinner"></span>
+    <div class="state-title">Загружаем приложение…</div>
+  </div>
+</main>
+<noscript>
+  <div class="state">В этом клиенте отключены скрипты — откройте приложение в Telegram.</div>
+</noscript>
+
+<script>
+// Сторож загрузки: модульные скрипты могут не выполниться (сеть оборвалась,
+// старый клиент, блокировка). Тогда экран остаётся пустым, и понять причину
+// нельзя ни пользователю, ни нам. Через 12 секунд показываем, что случилось.
+(function () {
+  var problem = '';
+  window.addEventListener('error', function (e) {
+    if (!problem) {
+      problem = (e && (e.message || (e.error && e.error.message)))
+        || (e && e.target && e.target.src ? 'не загрузился файл ' + e.target.src : '');
+    }
+  }, true);
+
+  setTimeout(function () {
+    if (window.__appBooted) return;
+    var note = document.getElementById('boot-note');
+    if (!note) return;
+    var tg = (window.Telegram && window.Telegram.WebApp) || {};
+    var about = ['Telegram ' + (tg.version || '?'), tg.platform || '?'].join(' · ');
+    note.innerHTML =
+      '<div class="state-title">Приложение не загрузилось</div>' +
+      '<div class="state-text">' + (problem || 'скрипты не выполнились — похоже, оборвалась связь') + '</div>' +
+      '<div class="state-text">' + about + '</div>' +
+      '<button class="btn mt8" type="button" onclick="location.reload()">Попробовать снова</button>';
+  }, 12000);
+})();
+</script>
 
 <!-- Своя главная кнопка: используется, только если нет Telegram.WebApp.MainButton -->
 <div id="mainbtn-wrap" class="mainbtn-wrap" hidden>

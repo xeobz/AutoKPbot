@@ -291,6 +291,8 @@ body.has-tabbar.has-mainbtn { --chrome: 142px; }
 /* ---------- Состояния ---------- */
 .state { padding: var(--s5) var(--s3); text-align: center; color: var(--hint); }
 .state-title { color: var(--text); font-weight: 600; margin-bottom: var(--s1); }
+/* Строка причины на экране неудачной загрузки — она же диагноз для нас */
+.state-text  { font-size: 13px; line-height: 1.45; margin-top: 4px; word-break: break-word; }
 .err-box, .warn-box, .ok-box {
   border-radius: var(--radius-sm); padding: 10px var(--s3); font-size: 14px;
 }

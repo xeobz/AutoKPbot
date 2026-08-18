@@ -7,6 +7,10 @@ import { renderHistory } from './history.js?v=2';
 import { renderSettings } from './settings.js?v=2';
 import { renderDraft } from './draft.js?v=2';
 
+// Отмечаемся сразу: сторож в index.html по этому флагу понимает, что модули
+// доехали и выполнились, и не показывает сообщение о неудачной загрузке
+window.__appBooted = true;
+
 const appEl = document.getElementById('app');
 const tabbarEl = document.getElementById('tabbar');
 const topbarEl = document.getElementById('topbar');
