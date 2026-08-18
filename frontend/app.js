@@ -13,6 +13,9 @@ const topbarEl = document.getElementById('topbar');
 const topbarInfoEl = document.getElementById('topbar-info');
 
 let me = null;
+
+/** Курс дня и профиль нужны экрану расчёта — отдаём наружу. */
+export const getMe = () => me;
 let currentTab = 'calc';
 
 boot();

@@ -2,6 +2,7 @@
 Сборка и отправка КП в Telegram — общее для бота и веб-API.
 """
 import logging
+import re
 
 from telegram import InputMediaPhoto
 
@@ -19,12 +20,23 @@ log = logging.getLogger("autokp.kp")
 
 def _telegram_photo(url: str) -> str:
     """
-    Telegram не принимает webp как фотографию. autoscout24 отдаёт превью
-    в webp — подменяем на jpeg. Нужно и для старых записей в истории,
-    сохранённых до правки парсера.
+    Ссылка на фото для Telegram: покрупнее и обязательно jpeg.
+
+    В мини-аппе галерею листают с телефона, поэтому в выборе фото остаются
+    лёгкие превью, а клиенту уходит крупный кадр: mobile.de отдаёт до
+    1600x1200 вместо 640x480, autoscout24 — до 1600 вместо 1280. Telegram
+    всё равно ужмёт до 1280 по длинной стороне, но из 640 он крупнее не
+    сделает — оттуда и мыло.
+
+    webp Telegram фотографией не принимает — подменяем на jpeg. Старые
+    записи в истории тоже проходят через эту функцию и чинятся на лету.
     """
     if url.endswith(".webp") and "autoscout24" in url:
-        return url[: -len(".webp")] + ".jpg"
+        url = url[: -len(".webp")] + ".jpg"
+    if "classistatic.de" in url:
+        url = re.sub(r"rule=mo-\d+\.jpg", "rule=mo-1600.jpg", url)
+    elif "pictures.autoscout24" in url:
+        url = re.sub(r"/\d{3,4}x\d{3,4}\.jpg", "/1600x1200.jpg", url)
     return url
 
 

@@ -36,11 +36,28 @@ function humanError(status, data) {
   return `Запрос не прошёл (код ${status}).`;
 }
 
+// Сколько ждём ответа. Разбор объявления и сборка КП идут десятки секунд —
+// им нужен запас, остальному хватает половины минуты. Без предела запрос
+// в мобильной сети может висеть бесконечно, и приложение выглядит зависшим.
+const TIMEOUTS = [
+  [/\/api\/parse/, 180000],
+  [/\/api\/(preview|submit)/, 150000],
+];
+const DEFAULT_TIMEOUT = 30000;
+
+function timeoutFor(path) {
+  const hit = TIMEOUTS.find(([re]) => re.test(path));
+  return hit ? hit[1] : DEFAULT_TIMEOUT;
+}
+
 export async function request(path, { method = 'GET', body } = {}) {
   const headers = {};
   const id = initData();
   if (id) headers['X-Init-Data'] = id; // в браузере заголовка нет — сервер пустит в dev-режиме
   if (body !== undefined) headers['Content-Type'] = 'application/json';
+
+  const ctrl = AbortController ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutFor(path)) : null;
 
   let res;
   try {
@@ -48,9 +65,22 @@ export async function request(path, { method = 'GET', body } = {}) {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: ctrl ? ctrl.signal : undefined,
     });
-  } catch {
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      // Отправку могло и выполнить: сервер пишет строку и шлёт КП дольше,
+      // чем мы готовы ждать. Поэтому не «ошибка», а «проверьте чат».
+      throw new ApiError(
+        /submit/.test(path)
+          ? 'Ответ не пришёл вовремя. Проверьте чат с ботом и историю — запись могла пройти.'
+          : 'Сервер долго не отвечает. Попробуйте ещё раз.',
+        0,
+      );
+    }
     throw new ApiError('Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.', 0);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 
   const text = await res.text().catch(() => '');

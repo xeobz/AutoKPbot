@@ -178,7 +178,8 @@ def build_kp_parts(
     if direction in ("kult40", "msk") and not util_reduced:
         footer = FULL_UTIL_FOOTER
 
-    car_line = f"{_emoji_tag(brand_emoji_id, brand_emoji_fallback)} {title}"
+    # Эмодзи марки — справа от названия: слева он отжимает название от края
+    car_line = f"{title} {_emoji_tag(brand_emoji_id, brand_emoji_fallback)}"
     price_line = f"{_emoji_tag(price_emoji_id, '💸')}{fmt_price_rub(total_rub)}"
 
     header = f"ДОСТУПЕН В ЕВРОПЕ {_emoji_tag(header_emoji_id, header_emoji_fallback)}"

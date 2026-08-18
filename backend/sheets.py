@@ -11,7 +11,7 @@ from pathlib import Path
 import gspread
 from dotenv import load_dotenv
 
-from calc import util_fee
+from calc import customs_eur_for_row, util_fee
 from storage import get_tariffs
 
 log = logging.getLogger(__name__)
@@ -179,7 +179,7 @@ def append_car_row(data: dict) -> int:
             # R: ЭПТС/СБКТС, S: таможня EUR
             {"range": f"R{r}:S{r}", "values": [[
                 data.get("epts_rub", t["epts_rub"]),
-                data.get("customs_eur", "") or "",
+                customs_eur_for_row(data),
             ]]},
             # T: таможня ₽
             {"range": f"T{r}", "values": [[f"=S{r}*N{r}*P{r}"]]},
@@ -202,7 +202,9 @@ def _update_minsk_row(sheet_row: int, data: dict) -> None:
             {"range": f"B{r}",   "values": [[data.get("counterparty", "")]]},
             {"range": f"I{r}",   "values": [[data.get("vat", 1.19)]]},
             {"range": f"K{r}",   "values": [[_buyback_cell(data, f"H{r}")]]},
-            {"range": f"S{r}",   "values": [[data.get("customs_eur", "") or ""]]},
+            {"range": f"N{r}",   "values": [[data.get("rate_eur_usdt", 1.1621)]]},
+            {"range": f"P{r}",   "values": [[data.get("rate_usdt_rub", 79.7)]]},
+            {"range": f"S{r}",   "values": [[customs_eur_for_row(data)]]},
             {"range": f"U{r}",   "values": [[data.get("util_rub", "") or ""]]},
         ],
         value_input_option="USER_ENTERED",
@@ -298,6 +300,8 @@ def update_kult40_row(sheet_row: int, data: dict) -> None:
             {"range": f"B{r}", "values": [[data.get("counterparty", "")]]},
             {"range": f"H{r}", "values": [[data.get("vat", 1.19)]]},
             {"range": f"J{r}", "values": [[_buyback_cell(data, f"G{r}")]]},
+            {"range": f"M{r}", "values": [[data.get("rate_eur_usdt", 1.1621)]]},
+            {"range": f"O{r}", "values": [[data.get("rate_usdt_rub", 79.7)]]},
             {"range": f"R{r}", "values": [[data.get("evacuator_rub", 0) or 0]]},
             {"range": f"S{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]},
             {"range": f"T{r}", "values": [[util_fee(data)]]},
@@ -315,6 +319,8 @@ def update_msk_row(sheet_row: int, data: dict) -> None:
             {"range": f"B{r}", "values": [[data.get("counterparty", "")]]},
             {"range": f"H{r}", "values": [[data.get("vat", 1.19)]]},
             {"range": f"J{r}", "values": [[_buyback_cell(data, f"G{r}")]]},
+            {"range": f"M{r}", "values": [[data.get("rate_eur_usdt", 1.1621)]]},
+            {"range": f"O{r}", "values": [[data.get("rate_usdt_rub", 79.7)]]},
             {"range": f"R{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]},
             {"range": f"S{r}", "values": [[util_fee(data)]]},
         ],

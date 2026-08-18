@@ -26,6 +26,7 @@ _DEFAULTS = {
     "broker_rub":       "120000",  # ₽ брокер (Культ40 и СВХ МСК)
     "util_fixed_rub":   "5200",    # ₽ льготный утиль (Культ40 и СВХ МСК)
     "epts_rub":         "45000",   # ₽ ЭПТС/СБКТС (только Минск)
+    "customs_kf_minsk": "1.03",    # коэффициент к таможне РБ (столбец S)
     "invoice_pct":      "1.3",     # % инвойса от НЕТТО
     "invoice_fix":      "100",     # € фикс. часть инвойса
     "extra_fix":        "350",     # € прочие расходы
@@ -65,6 +66,7 @@ EDITABLE_SETTINGS = {
     "broker_rub":       ("Брокер (Культ40 и СВХ МСК)", "₽",  "tariffs"),
     "util_fixed_rub":   ("Утиль льготный (Культ40/МСК)", "₽", "tariffs"),
     "epts_rub":         ("ЭПТС/СБКТС (только Минск)",  "₽",  "tariffs"),
+    "customs_kf_minsk": ("Коэффициент таможни (Минск)", "×",  "tariffs"),
     "invoice_pct":      ("Инвойс, процент",            "%",  "tariffs"),
     "invoice_fix":      ("Инвойс, фикс. часть",        "€",  "tariffs"),
     "extra_fix":        ("Прочие расходы",             "€",  "tariffs"),
@@ -301,6 +303,7 @@ def get_tariffs() -> dict:
         "broker_rub":       get_float("broker_rub"),
         "util_fixed_rub":   get_float("util_fixed_rub"),
         "epts_rub":         get_float("epts_rub"),
+        "customs_kf_minsk": get_float("customs_kf_minsk"),
         "invoice_pct":      get_float("invoice_pct"),
         "invoice_fix":      get_float("invoice_fix"),
         "extra_fix":        get_float("extra_fix"),

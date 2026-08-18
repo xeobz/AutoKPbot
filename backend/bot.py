@@ -137,7 +137,8 @@ CONTACT  = "@Aleksandr_Montaro"
     ASK_VAT_MANUAL,      # 28 — НДС: свой процент
     ASK_UTIL_CHOICE,     # 29 — утиль: льготный или свой (Культ40 + МСК)
     ASK_UTIL_MANUAL,     # 30 — утиль: ввод суммы
-) = range(31)
+    ASK_RATE,            # 31 — наценка к курсу дня
+) = range(32)
 
 # Адрес мини-аппа (https). Пусто — бот работает по-старому, без веба.
 WEB_APP_URL = os.getenv("WEB_APP_URL", "").rstrip("/")
@@ -149,6 +150,9 @@ VAT_OPTIONS = [
     ("0% — без НДС",       "1.0"),
 ]
 BUYBACK_PCTS = list(range(5, 16))   # 5–15 %
+
+# Наценка к утреннему курсу USDT→₽: курс дня один, а продаём по нему по-разному
+RATE_MARKUPS = [("+2%", 1.02), ("+2.5%", 1.025), ("+3%", 1.03)]
 
 # Часовой пояс для утреннего опроса курсов — сервер живёт в UTC
 MSK = timezone(timedelta(hours=3))
@@ -267,7 +271,8 @@ def _history_edit_kb(direction: str = "minsk") -> InlineKeyboardMarkup:
              InlineKeyboardButton("✏️ Таможня ТКС ₽", callback_data="hedit:customs_tks_rub")],
             [InlineKeyboardButton("✏️ Утиль ₽",       callback_data="hedit:util_rub"),
              InlineKeyboardButton("✏️ Выкуп %",       callback_data="hedit:buyback_pct")],
-            [InlineKeyboardButton("✏️ Контрагент",    callback_data="hedit:counterparty")],
+            [InlineKeyboardButton("📈 Курс USDT→₽",   callback_data="hedit:rate_usdt_rub"),
+             InlineKeyboardButton("✏️ Контрагент",    callback_data="hedit:counterparty")],
             [InlineKeyboardButton("📄 Сгенерировать КП", callback_data="hedit:gen_kp")],
             [InlineKeyboardButton("⬅️ К списку",      callback_data="hist:back")],
         ])
@@ -277,6 +282,7 @@ def _history_edit_kb(direction: str = "minsk") -> InlineKeyboardMarkup:
              InlineKeyboardButton("✏️ Утиль ₽",       callback_data="hedit:util_rub")],
             [InlineKeyboardButton("✏️ Выкуп %",       callback_data="hedit:buyback_pct"),
              InlineKeyboardButton("✏️ Контрагент",    callback_data="hedit:counterparty")],
+            [InlineKeyboardButton("📈 Курс USDT→₽",   callback_data="hedit:rate_usdt_rub")],
             [InlineKeyboardButton("📄 Сгенерировать КП", callback_data="hedit:gen_kp")],
             [InlineKeyboardButton("⬅️ К списку",      callback_data="hist:back")],
         ])
@@ -286,6 +292,7 @@ def _history_edit_kb(direction: str = "minsk") -> InlineKeyboardMarkup:
          InlineKeyboardButton("✏️ Утиль ₽",     callback_data="hedit:util_rub")],
         [InlineKeyboardButton("✏️ Выкуп %",     callback_data="hedit:buyback_pct"),
          InlineKeyboardButton("✏️ Контрагент",  callback_data="hedit:counterparty")],
+        [InlineKeyboardButton("📈 Курс USDT→₽", callback_data="hedit:rate_usdt_rub")],
         [InlineKeyboardButton("📄 Сгенерировать КП", callback_data="hedit:gen_kp")],
         [InlineKeyboardButton("⬅️ К списку",    callback_data="hist:back")],
     ])
@@ -557,9 +564,36 @@ async def receive_direction(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     })
 
     dir_label = {"minsk": "🏙 ЕС/Минск", "kult40": "🏭 ЕС/Культ40", "msk": "🌆 ЕС-МСК"}.get(direction, direction)
+    base = float(ctx.user_data.get("rate_usdt_rub", 0) or 0)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"{label} → {base * mk:.2f} ₽", callback_data=f"rate:{mk}")]
+        for label, mk in RATE_MARKUPS
+    ])
     await query.edit_message_text(
         f"✅ Нашёл: <b>{car_name}</b>  ·  {dir_label}\n"
         f"💶 Цена: <b>{fmt_eur(price)}</b>\n\n"
+        f"📈 Курс с утра: <b>{base:g} ₽</b> за USDT\n"
+        f"Выберите <b>наценку</b>:",
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
+    return ASK_RATE
+
+
+async def receive_rate_markup(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """ASK_RATE — наценка к утреннему курсу USDT→₽."""
+    query = update.callback_query
+    await query.answer()
+
+    markup = float(query.data.split(":")[1])
+    base   = float(ctx.user_data.get("rate_usdt_base") or ctx.user_data.get("rate_usdt_rub", 0) or 0)
+    ctx.user_data["rate_usdt_base"] = base
+    ctx.user_data["rate_markup"]    = markup
+    ctx.user_data["rate_usdt_rub"]  = round(base * markup, 4)
+
+    await query.edit_message_text(
+        f"✅ Курс: <b>{base:g} ₽</b> +{(markup - 1) * 100:g}% → "
+        f"<b>{ctx.user_data['rate_usdt_rub']:g} ₽</b>\n\n"
         f"Введите имя <b>контрагента</b>:",
         parse_mode="HTML",
     )
@@ -1047,6 +1081,7 @@ async def history_edit_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         "customs_tks_rub": "таможню ТКС в рублях (например: 500000)",
         "buyback_pct":     "процент выкупа (1–30) или сумму в EUR (от 100)",
         "counterparty":    "имя контрагента",
+        "rate_usdt_rub":   "курс USDT→₽ (например: 82.09)",
     }
     ctx.user_data["_hist_edit_field"] = action
     cancel_kb = InlineKeyboardMarkup([[
@@ -1080,12 +1115,16 @@ async def history_edit_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     text = (update.message.text or "").strip()
 
     # Validate & apply
-    if field in ("customs_eur", "util_rub", "evacuator_rub", "customs_tks_rub"):
+    if field in ("customs_eur", "util_rub", "evacuator_rub", "customs_tks_rub",
+                 "rate_usdt_rub"):
         val = _parse_number(text)
         if val is None:
             await update.message.reply_text("Введите число:")
             return HISTORY_EDIT_VALUE
         data[field] = val
+        # Курс правится целиком: наценка уже в нём, пересчитывать её не от чего
+        if field == "rate_usdt_rub":
+            data.pop("rate_markup", None)
 
     elif field == "buyback_pct":
         val = _parse_number(text)
@@ -2032,6 +2071,9 @@ def build_application(token: str):
             ],
             ASK_DIRECTION: [
                 CallbackQueryHandler(receive_direction, pattern=r"^dir:"),
+            ],
+            ASK_RATE: [
+                CallbackQueryHandler(receive_rate_markup, pattern=r"^rate:"),
             ],
             ASK_COUNTERPARTY: [
                 MessageHandler(_text, receive_counterparty),

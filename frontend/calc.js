@@ -7,6 +7,7 @@ import {
 } from './ui.js?v=2';
 import { mainButton, haptic } from './tg.js?v=2';
 import { photoGrid, galleryBar } from './gallery.js?v=2';
+import { getMe } from './app.js?v=2';
 
 // Подпись у направления вместо декоративной картинки — она несёт смысл
 export const DIRECTIONS = [
@@ -31,6 +32,7 @@ export const FIELD_LABELS = {
   util_rub: 'Утиль, ₽',
   customs_tks_rub: 'Таможня ТКС, ₽',
   evacuator_rub: 'Эвакуатор СПБ-МСК, ₽',
+  rate_usdt_rub: 'Курс USDT→₽',
 };
 
 /** Запасной набор полей, если сервер не прислал fields. */
@@ -41,6 +43,9 @@ export const DIR_FIELDS = {
 };
 
 export const dirLabel = (key) => (DIRECTIONS.find((d) => d.key === key) || {}).label || key || '—';
+
+// Наценка к утреннему курсу USDT→₽: курс дня один, продают по нему по-разному
+const RATE_MARKUPS = [1.02, 1.025, 1.03];
 
 const PROGRESS_TEXTS = [
   'Открываю объявление…',
@@ -61,6 +66,7 @@ function freshState() {
     parsing: false, parseError: '', progressIdx: 0,
     draftId: null, car: null,
     direction: null,
+    rateMarkup: null,       // наценка к курсу дня, спрашиваем как в боте
     counterparty: '', counterpartyDone: false,
     vat: null,
     buyback: { mode: 'pct', value: 10 }, buybackChosen: false,
@@ -99,7 +105,8 @@ function build() {
 
   const parts = [stepLink()];
   if (st.car) parts.push(carCard(), stepDirection());
-  if (st.direction) parts.push(stepCounterparty());
+  if (st.direction) parts.push(stepRate());
+  if (st.rateMarkup) parts.push(stepCounterparty());
   if (st.counterpartyDone) parts.push(stepVat());
   if (st.vat) parts.push(stepBuyback());
   if (st.buybackChosen) {
@@ -248,11 +255,11 @@ function stepDirection() {
         onclick: () => {
           haptic.select();
           st.direction = d.key;
+          st.open = 'rate';
           // У направлений разные расходы: выбранный утиль к новому не относится
           st.utilChosen = false;
           st.utilCustomOpen = false;
           st.fields.util_rub = '';
-          st.open = 'counterparty';
           render();
           recalcNow();
         },
@@ -260,6 +267,49 @@ function stepDirection() {
         h('span', { class: 'chip-main', style: { fontSize: '14px' }, text: d.label }),
         h('span', { class: 'chip-sub', text: d.sub }),
       )),
+    ),
+  });
+}
+
+/* --- 3. Курс дня с наценкой --- */
+function baseRate() {
+  const m = getMe();
+  const v = m && m.rates && Number(m.rates.rate_usdt_rub);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+function rateSummary() {
+  if (!st.rateMarkup) return '';
+  const pct = Number(((st.rateMarkup - 1) * 100).toFixed(2));
+  return `${(baseRate() * st.rateMarkup).toFixed(2)} ₽ · +${pct}%`;
+}
+
+function stepRate() {
+  const base = baseRate();
+  const rates = (getMe() || {}).rates || {};
+  return step({
+    key: 'rate', num: 3, title: 'Курс', done: !!st.rateMarkup,
+    summary: rateSummary(),
+    body: () => h('div', {},
+      h('div', { class: 'hint' , text: base
+        ? `Курс с утра: ${base} ₽ за USDT${rates.is_today ? '' : ' · задан не сегодня'}`
+        : 'Курс дня ещё не задан — попросите администратора выставить его.' }),
+      h('div', { class: 'chips mt8' },
+        ...RATE_MARKUPS.map((mk) => h('button', {
+          class: 'chip', type: 'button',
+          'aria-pressed': st.rateMarkup === mk ? 'true' : 'false',
+          onclick: () => {
+            haptic.select();
+            st.rateMarkup = mk;
+            st.open = 'counterparty';
+            render();
+            recalcNow();
+          },
+        },
+          h('span', { class: 'chip-main', text: `+${Number(((mk - 1) * 100).toFixed(2))}%` }),
+          h('span', { class: 'chip-sub', text: base ? `${(base * mk).toFixed(2)} ₽` : '—' }),
+        )),
+      ),
     ),
   });
 }
@@ -273,7 +323,7 @@ function stepCounterparty() {
     render();
   };
   return step({
-    key: 'counterparty', num: 3, title: 'Контрагент', done: st.counterpartyDone,
+    key: 'counterparty', num: 4, title: 'Контрагент', done: st.counterpartyDone,
     summary: st.counterparty,
     body: () => h('div', {},
       h('div', { class: 'field' },
@@ -316,7 +366,7 @@ function stepVat() {
   };
 
   return step({
-    key: 'vat', num: 4, title: 'НДС', done: !!st.vat,
+    key: 'vat', num: 5, title: 'НДС', done: !!st.vat,
     summary: cur ? `${cur.label} · ${cur.country}` : (isCustom ? vatLabel(st.vat) : ''),
     body: () => h('div', {},
       h('div', { class: 'chips' },
@@ -366,7 +416,7 @@ function buybackSummary() {
 
 function stepBuyback() {
   return step({
-    key: 'buyback', num: 5, title: 'Выкуп', done: st.buybackChosen,
+    key: 'buyback', num: 6, title: 'Выкуп', done: st.buybackChosen,
     summary: buybackSummary(),
     body: () => {
       if (st.calcError && !st.calc) return stateError(st.calcError, recalcNow);
@@ -457,7 +507,7 @@ function stepFields() {
   const keys = fieldList();
   const summary = keys.map((k) => fmtInt(toNum(st.fields[k]))).join(' · ');
   return step({
-    key: 'fields', num: 6, title: 'Таможня и расходы', done: true, summary,
+    key: 'fields', num: 7, title: 'Таможня и расходы', done: true, summary,
     body: () => h('div', {},
       ...keys.map((k) => h('label', { class: 'field' },
         h('span', { class: 'field-label', text: FIELD_LABELS[k] }),
@@ -506,7 +556,7 @@ function stepUtil() {
   };
 
   return step({
-    key: 'util', num: fieldList().length ? 7 : 6, title: 'Утильсбор',
+    key: 'util', num: fieldList().length ? 8 : 7, title: 'Утильсбор',
     done: st.utilChosen,
     summary: st.utilChosen ? `${fmtRub(value)}${isReduced ? ' · льготный' : ''}` : '',
     body: () => h('div', {},
@@ -621,6 +671,7 @@ function confirmBlock() {
     ['Авто', c.title || '—'],
     ['Направление', dirLabel(st.direction)],
     ['Контрагент', st.counterparty.trim()],
+    ['Курс USDT→₽', rateSummary() || '—'],
     ['Выкуп', buybackSummary() || '—'],
     // Сумма утиля отличается в сотни раз — её видно перед необратимой отправкой
     ...(asksUtil() ? [['Утиль', st.utilChosen
@@ -722,6 +773,7 @@ function calcBody() {
     draft_id: st.draftId,
     direction: st.direction,
     vat: st.vat,
+    rate_markup: st.rateMarkup || 1,
     buyback: { mode: st.buyback.mode, value: Number(st.buyback.value) },
     customs_eur: toNum(st.fields.customs_eur),
     util_rub: toNum(st.fields.util_rub),
@@ -782,8 +834,8 @@ function isReady() {
   const photosOk = !st.withKp || st.photos.length > 0;
   // Утиль не подставляем молча: льготный положен не всякой машине
   const utilOk = !asksUtil() || st.utilChosen;
-  return !!(st.draftId && st.direction && st.vat && st.counterparty.trim()
-            && st.buybackChosen && utilOk && photosOk);
+  return !!(st.draftId && st.direction && st.rateMarkup && st.vat
+            && st.counterparty.trim() && st.buybackChosen && utilOk && photosOk);
 }
 
 function syncMainButton() {

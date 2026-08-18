@@ -178,6 +178,7 @@ class CalcReq(BaseModel):
     buyback: Buyback = Buyback()
     customs_eur: float = 0
     util_rub: float = 0
+    rate_markup: float = 1.0     # наценка к утреннему курсу USDT→₽
     customs_tks_rub: float = 0
     evacuator_rub: float = 0
 
@@ -242,8 +243,12 @@ def _apply_request(base: dict, req: CalcReq) -> dict:
     if not (1.0 <= req.vat <= 2.0):
         raise HTTPException(400, "НДС должен быть от 0% до 100%")
 
+    if not (1.0 <= req.rate_markup <= 1.2):
+        raise HTTPException(400, "Наценка к курсу должна быть от 0% до 20%")
+
     tf = get_tariffs()
     r  = get_rates()
+    markup = req.rate_markup
     d  = dict(base)
     d.update({
         "direction":       req.direction,
@@ -253,7 +258,10 @@ def _apply_request(base: dict, req: CalcReq) -> dict:
         # Снимок тарифов: старые записи не должны пересчитываться после их правки
         "tariffs":         tf,
         "rate_eur_usdt":   r["rate_eur_usdt"],
-        "rate_usdt_rub":   r["rate_usdt_rub"],
+        # Курс дня один, а продают по нему с разной наценкой
+        "rate_usdt_base":  r["rate_usdt_rub"],
+        "rate_markup":     markup,
+        "rate_usdt_rub":   round(r["rate_usdt_rub"] * markup, 4),
         "customs_eur":     req.customs_eur,
         "util_rub":        req.util_rub,
         "customs_tks_rub": req.customs_tks_rub,
@@ -343,6 +351,8 @@ async def calc_endpoint(req: CalcReq, user: dict = Depends(current_user)):
         "buyback_min_eur":  get_float("buyback_min_eur", 2500),
         # Льготный утиль — подпись на кнопке выбора у Культ40 и МСК
         "util_reduced_rub": get_float("util_fixed_rub", 5200),
+        # Наценки к курсу дня — подписи кнопок в мини-аппе
+        "rate_markups":     [1.02, 1.025, 1.03],
         "fields":           DIRECTION_FIELDS[req.direction],
         "rates":            _rates_payload(),
     }
@@ -476,8 +486,12 @@ async def history_edit(item_id: int, req: HistoryEditReq, user: dict = Depends(c
     data = json.loads(rec["data_json"])
     field = req.field
 
-    if field in ("customs_eur", "util_rub", "customs_tks_rub", "evacuator_rub"):
+    if field in ("customs_eur", "util_rub", "customs_tks_rub", "evacuator_rub",
+                 "rate_usdt_rub", "rate_eur_usdt"):
         data[field] = float(req.value)
+        # Курс правится целиком: наценка уже в нём
+        if field == "rate_usdt_rub":
+            data.pop("rate_markup", None)
 
     elif field == "counterparty":
         data["counterparty"] = str(req.value)

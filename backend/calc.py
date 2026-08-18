@@ -57,6 +57,37 @@ def tariffs_for(d: dict) -> dict:
     return current
 
 
+def customs_kf(tf: dict | None = None) -> float:
+    """
+    Коэффициент к таможне РБ. Меняется в настройках, поэтому у записей
+    в истории берётся из их снимка тарифов — иначе старый расчёт поедет.
+    """
+    kf = (tf or get_tariffs()).get("customs_kf_minsk") or 1.0
+    return float(kf)
+
+
+def fmt_kf(tf: dict | None = None) -> str:
+    """«1.03» без хвостовых нулей — для подписи строки расчёта."""
+    return f"{customs_kf(tf):g}"
+
+
+def rate_label(d: dict, rate: float) -> str:
+    """«82.09 · +3%» — по строке видно, что курс дня взят с наценкой."""
+    mk = float(d.get("rate_markup") or 1)
+    if abs(mk - 1) < 1e-9:
+        return f"{rate:g}"
+    return f"{rate:g} · +{(mk - 1) * 100:g}%"
+
+
+def customs_eur_for_row(d: dict):
+    """
+    Таможня РБ с коэффициентом — то, что уходит в столбец S таблицы.
+    Пусто, если менеджер её ещё не вводил: ноль в S смотрится как «бесплатно».
+    """
+    val = d.get("customs_eur") or 0
+    return round(val * customs_kf(tariffs_for(d)), 2) if val else ""
+
+
 def util_fee(d: dict, tf: dict | None = None) -> float:
     """
     Утильсбор для Культ40 и МСК: сумма, названная менеджером, иначе льготный
@@ -169,7 +200,9 @@ def calc_minsk(d: dict) -> dict:
     o   = m * n
     q   = o * p
     r   = d.get("epts_rub") or d.get("r_value") or tf["epts_rub"]
-    s   = d.get("customs_eur", 0) or 0
+    # Таможня РБ идёт с коэффициентом (столбец S): менеджер вводит счёт
+    # брокера, в расчёт и в таблицу попадает уже с наценкой
+    s   = (d.get("customs_eur", 0) or 0) * customs_kf(tf)
     t   = s * n * p
     u   = d.get("util_rub", 0) or 0
     v   = q + r + t + u
@@ -247,7 +280,7 @@ def card_rows(d: dict) -> list[dict]:
             _SEP,
             _row("📈 Курс EUR→USDT (M)", f"{c['m']}",       group="Перевод в рубли"),
             _row("💵 USDT (N)",          fmt_eur(c["n"])),
-            _row("📈 Курс USDT→₽ (O)",   f"{c['o']}"),
+            _row("📈 Курс USDT→₽ (O)",   rate_label(d, c["o"])),
             _row("💵 Итого ₽ (P)",       fmt_rub(c["p"]),   role="sum"),
             _SEP,
             _row("🏢 Брокер (Q)",        fmt_rub(c["q"]),   group="Расходы в России"),
@@ -283,11 +316,12 @@ def card_rows(d: dict) -> list[dict]:
         _SEP,
         _row("📈 Курс EUR→USDT (N)", f"{c['n']}",       group="Перевод в рубли"),
         _row("💵 USDT (O)",          fmt_eur(c["o"])),
-        _row("📈 Курс USDT→₽ (P)",   f"{c['p']}"),
+        _row("📈 Курс USDT→₽ (P)",   rate_label(d, c["p"])),
         _row("💵 Итого ₽ (Q)",       fmt_rub(c["q"]),   role="sum"),
         _SEP,
         _row("🔧 ЭПТС/СБКТС (R)",    fmt_rub(c["r"]),   group="Расходы в России"),
-        _row("🛃 Таможня EUR (S)",   fmt_eur(c["s"]) if c["s"] else "⏳ не указана"),
+        _row(f"🛃 Таможня EUR ×{fmt_kf(tariffs_for(d))} (S)",
+             fmt_eur(c["s"]) if c["s"] else "⏳ не указана"),
         _row("🛃 Таможня ₽ (T)",     fmt_rub(c["t"]) if c["s"] else "⏳"),
         _row("♻️ Утиль (U)",         fmt_rub(c["u"]) if c["u"] else "⏳ не указан"),
         _SEP,
