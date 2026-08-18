@@ -268,6 +268,8 @@ def card_rows(d: dict) -> list[dict]:
     direction = d.get("direction", "minsk")
     pct = buyback_label(d)
 
+    tf = tariffs_for(d)
+
     if direction in ("kult40", "msk"):
         c = calc_v2(d)
         rows = [
@@ -276,6 +278,7 @@ def card_rows(d: dict) -> list[dict]:
             _row(f"🏦 Выкуп {pct} (J)",  fmt_eur(c["k"]),   role="key"),
             _row("📦 Логистика (I)",     fmt_eur(c["j"])),
             _row("📄 Инвойс (K)",        fmt_eur(c["l"])),
+            _row("🚘 Осмотр",            fmt_eur(tf["extra_fix"])),
             _row("💰 Итого EUR (L)",     fmt_eur(c["l_t"]), role="sum"),
             _SEP,
             _row("📈 Курс EUR→USDT (M)", f"{c['m']}",       group="Перевод в рубли"),
@@ -312,6 +315,7 @@ def card_rows(d: dict) -> list[dict]:
         _row(f"🏦 Выкуп {pct} (K)",  fmt_eur(c["k"]),   role="key"),
         _row("📦 Логистика (J)",     fmt_eur(c["j"])),
         _row("📄 Инвойс (L)",        fmt_eur(c["l"])),
+        _row("🚘 Осмотр",            fmt_eur(tf["extra_fix"])),
         _row("💰 Итого EUR (M)",     fmt_eur(c["m"]),   role="sum"),
         _SEP,
         _row("📈 Курс EUR→USDT (N)", f"{c['n']}",       group="Перевод в рубли"),
