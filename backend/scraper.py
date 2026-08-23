@@ -115,6 +115,15 @@ def normalise_gearbox(raw: str) -> str:
     return raw.strip()
 
 
+def _litres(ccm: int) -> float:
+    """
+    Кубики в литры с округлением вверх на половине: 1950 см³ → 2.0.
+    Обычный round() тут даёт 1.9 — 1.95 в двоичной дроби чуть меньше
+    полутора десятых, а в объявлении машина продаётся как двухлитровая.
+    """
+    return int(ccm / 100 + 0.5) / 10
+
+
 def parse_engine_litres(*sources: str) -> float | None:
     """Достаёт объём двигателя: «1,5 l», «2.0 TDI», «1 395 см³» → 1.5 / 2.0 / 1.4."""
     for src in sources:
@@ -125,7 +134,7 @@ def parse_engine_litres(*sources: str) -> float | None:
         if m:
             ccm = int(re.sub(r"\D", "", m.group(1)))
             if 600 <= ccm <= 9000:
-                return round(ccm / 1000, 1)
+                return _litres(ccm)
         # «1,5 l» / «2.0 TDI» / «1.5 TSI»
         m = re.search(r"\b(\d[.,]\d)\s*(?:l\b|л\b|liter|литр|tsi|tdi|tfsi|dci|cdi|hdi)", src, re.IGNORECASE)
         if m:

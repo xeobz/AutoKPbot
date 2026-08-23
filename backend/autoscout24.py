@@ -23,6 +23,7 @@ from scraper import (
     normalise_fuel,
     normalise_gearbox,
     parse_engine_litres,
+    _litres,
     parse_power_hp,
 )
 
@@ -240,7 +241,7 @@ def _parse_engine_litres(vehicle: dict, title: str) -> float | None:
         vehicle.get("rawCylinderCapacity")
     )
     if ccm and 600 <= ccm <= 9000:
-        return round(ccm / 1000, 1)
+        return _litres(ccm)
     return parse_engine_litres(
         _as_text(vehicle.get("displacementInCCM")),
         _as_text(vehicle.get("cylinderCapacity")),

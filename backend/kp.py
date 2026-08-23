@@ -150,6 +150,26 @@ def _emoji_tag(custom_emoji_id: str | None, fallback: str) -> str:
     return fallback
 
 
+# Базовое, что есть у любой машины: под обрезку по лимиту подписи должно
+# уходить именно оно, а не пневмоподвеска с массажем
+_BASIC = (
+    "abs", "esp", "esc", "asr", "isofix", "иммобилайзер", "усилитель руля",
+    "гидроусилитель", "подушк", "airbag", "центральный замок", "бортовой компьютер",
+    "стеклоподъемник", "стеклоподъёмник", "электростекла", "противобуксовочная",
+    "старт-стоп", "start/stop", "подлокотник", "подстаканник", "тонированные стекла",
+    "радио", "usb", "aux", "mp3", "bluetooth", "аварийный комплект",
+    "контроль давления в шинах", "омыватель фар", "противотуманн",
+    "датчик освещенности", "ручное переключение передач", "гарантия",
+)
+
+
+def _by_value(options: list[str]) -> list[str]:
+    """Порядок обрезки: ценное впереди, базовое в хвосте. Внутри — алфавит."""
+    basic = [o for o in options if any(b in o.lower() for b in _BASIC)]
+    rich  = [o for o in options if o not in basic]
+    return rich + basic
+
+
 def build_kp_parts(
     d: dict,
     total_rub: float,
@@ -164,12 +184,11 @@ def build_kp_parts(
     util_reduced: bool = True,
 ) -> list[str]:
     """
-    Собирает КП. Обычно это одно сообщение — подпись к фото.
+    Собирает КП — всегда одним сообщением, подписью к фото.
 
-    Если комплектация в подпись не влезает, режем на два сообщения:
-    первое (подпись к фото) — шапка и начало комплектации, второе —
-    её продолжение с ценой и контактами. Склеенные подряд, они дают
-    ровно тот же текст: ничего не теряется и не повторяется.
+    Комплектация приходит длиннее лимита подписи чаще, чем хотелось бы.
+    Вместо второго сообщения обрезаем список: сначала уходит базовое,
+    что есть у любой машины, ценные опции остаются.
     """
     direction = d.get("direction", "minsk")
     title = html.escape(car_title(d))
@@ -196,25 +215,23 @@ def build_kp_parts(
         # Весь текст КП жирный — одной обёрткой, без вложенных тегов внутри
         return "<b>" + "\n".join(lines) + "</b>"
 
-    opts = list(options)
-    body = ["", "Комплектация:"] + bullets(opts) if opts else []
-    whole = wrap(head + body + tail)
-    if tg_len(whole) <= SAFE_LIMIT:
-        return [whole]
+    opts = _by_value(options)
 
-    # Первая часть — сколько опций поместится в подпись к фото
-    fit = len(opts)
-    while fit > 0:
-        first = wrap(head + ["", "Комплектация:"] + bullets(opts[:fit]))
-        if tg_len(first) <= SAFE_LIMIT:
-            break
-        fit -= 1
+    def whole_of(o: list[str]) -> str:
+        body = ["", "Комплектация:"] + bullets(o) if o else []
+        return wrap(head + body + tail)
 
-    # Вторая — всё остальное вместе с ценой и контактами
-    rest = opts[fit:]
-    second = wrap(bullets(rest) + tail)
-    while rest and tg_len(second) > SAFE_MESSAGE_LIMIT:
-        rest.pop()
-        second = wrap(bullets(rest) + tail)
+    # КП должно уходить одним сообщением: склеивать две части вручную
+    # менеджеру неудобно. Если не влезает — снимаем опции с конца,
+    # а конец здесь — самое базовое: подушки, ABS, стеклоподъёмники
+    text = whole_of(opts)
+    while opts and tg_len(text) > SAFE_LIMIT:
+        opts.pop()
+        text = whole_of(opts)
 
-    return [first, second]
+    if len(opts) < len(options):
+        # Порядок в КП всё равно алфавитный — сортируем то, что осталось
+        opts.sort(key=lambda o: o.lower())
+        text = whole_of(opts)
+
+    return [text]

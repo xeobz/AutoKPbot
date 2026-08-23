@@ -156,9 +156,10 @@ def append_car_row(data: dict) -> int:
                 "",
                 data.get("price_eur", 0),
             ]]},
-            # H: НЕТТО — absolute ref to $I$2 (global VAT cell), matching sheet template
-            {"range": f"H{r}", "values": [[f"=G{r}/$I$2"]]},
-            # I: НДС (per-row, informational)
+            # H: НЕТТО — делим на НДС этой же строки. Ссылка на $I$2 брала
+            # общий НДС листа (1.19) и портила строки с другой ставкой
+            {"range": f"H{r}", "values": [[f"=G{r}/I{r}"]]},
+            # I: НДС строки — им и делим
             {"range": f"I{r}", "values": [[data.get("vat", 1.19)]]},
             # J: логистика (тариф из настроек)
             {"range": f"J{r}", "values": [[data.get("logistics", t["logistics_minsk"])]]},
@@ -200,6 +201,8 @@ def _update_minsk_row(sheet_row: int, data: dict) -> None:
     _with_retry(ws.batch_update,  # type: ignore[arg-type]
         [
             {"range": f"B{r}",   "values": [[data.get("counterparty", "")]]},
+            # Старые строки писались с =G/$I$2 — переписываем формулу заодно
+            {"range": f"H{r}",   "values": [[f"=G{r}/I{r}"]]},
             {"range": f"I{r}",   "values": [[data.get("vat", 1.19)]]},
             {"range": f"K{r}",   "values": [[_buyback_cell(data, f"H{r}")]]},
             {"range": f"N{r}",   "values": [[data.get("rate_eur_usdt", 1.1621)]]},
