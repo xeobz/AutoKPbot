@@ -199,6 +199,9 @@ _GERMAN = (
     " mit ", " und ", " für ", " ohne ", " inkl", " bei ", " vorn ", " hinten ",
     "fahrzeug", "ausstattung", "scheinwerfer", "lenkrad", "innenraum",
     "räder", "reifen", "verkauf", "gewähr", "garantie",
+    # Цвета и «пакет» по-немецки: модель охотно оставляет их как фирменные
+    "schwarz", "weiss", "weiß", "grau", "blau", "braun", "silber", "hochglanz",
+    "paket", "metallic",
 )
 
 
