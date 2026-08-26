@@ -19,6 +19,25 @@ log = logging.getLogger(__name__)
 
 # ── Формулы, зависящие от тарифов ────────────────────────────────────────────
 
+def _ru_num(v: float) -> str:
+    """Число для формулы: у таблицы локаль ru_RU, разделитель — запятая."""
+    return f"{v:g}".replace(".", ",")
+
+
+def _rate_cell(data: dict):
+    """
+    Курс USDT→₽. Если менеджер взял утренний курс с наценкой, пишем формулой
+    «=84,1*(1+2%)»: по ячейке сразу видно, сколько накинули. Курс, введённый
+    руками, остаётся обычным числом — накидывать там нечего.
+    """
+    rate = data.get("rate_usdt_rub", 79.7)
+    base = data.get("rate_usdt_base")
+    markup = float(data.get("rate_markup") or 1)
+    if not base or abs(markup - 1) < 1e-9:
+        return rate
+    return f"={_ru_num(float(base))}*(1+{_ru_num(round((markup - 1) * 100, 4))}%)"
+
+
 def _buyback_cell(data: dict, netto_ref: str):
     """
     Выкуп: формула от процента (обычный случай) либо фиксированная сумма,
@@ -174,7 +193,7 @@ def append_car_row(data: dict) -> int:
             # O: итого USDT
             {"range": f"O{r}", "values": [[f"=M{r}*N{r}"]]},
             # P: курс USDT/₽
-            {"range": f"P{r}", "values": [[data.get("rate_usdt_rub", 79.7)]]},
+            {"range": f"P{r}", "values": [[_rate_cell(data)]]},
             # Q: итого ₽
             {"range": f"Q{r}", "values": [[f"=O{r}*P{r}"]]},
             # R: ЭПТС/СБКТС, S: таможня EUR
@@ -206,7 +225,7 @@ def _update_minsk_row(sheet_row: int, data: dict) -> None:
             {"range": f"I{r}",   "values": [[data.get("vat", 1.19)]]},
             {"range": f"K{r}",   "values": [[_buyback_cell(data, f"H{r}")]]},
             {"range": f"N{r}",   "values": [[data.get("rate_eur_usdt", 1.1621)]]},
-            {"range": f"P{r}",   "values": [[data.get("rate_usdt_rub", 79.7)]]},
+            {"range": f"P{r}",   "values": [[_rate_cell(data)]]},
             {"range": f"S{r}",   "values": [[customs_eur_for_row(data)]]},
             {"range": f"U{r}",   "values": [[data.get("util_rub", "") or ""]]},
         ],
@@ -242,7 +261,7 @@ def append_kult40_row(data: dict) -> tuple[int, int]:
             {"range": f"L{r}", "values": [[f"=G{r}+I{r}+J{r}+K{r}+{int(t['extra_fix'])}"]]},
             {"range": f"M{r}", "values": [[data.get("rate_eur_usdt", 1.1621)]]}, # Курс EUR/USDT
             {"range": f"N{r}", "values": [[f"=L{r}*M{r}"]]},                     # USDT
-            {"range": f"O{r}", "values": [[data.get("rate_usdt_rub", 79.7)]]},   # Курс USDT/₽
+            {"range": f"O{r}", "values": [[_rate_cell(data)]]},                  # Курс USDT/₽
             {"range": f"P{r}", "values": [[f"=N{r}*O{r}"]]},                     # RUB
             {"range": f"Q{r}", "values": [[t["broker_rub"]]]},                   # Брокер
             {"range": f"R{r}", "values": [[data.get("evacuator_rub", 0) or 0]]}, # Эвакуатор
@@ -282,7 +301,7 @@ def append_msk_row(data: dict) -> tuple[int, int]:
             {"range": f"L{r}", "values": [[f"=G{r}+I{r}+J{r}+K{r}+{int(t['extra_fix'])}"]]},
             {"range": f"M{r}", "values": [[data.get("rate_eur_usdt", 1.1621)]]},
             {"range": f"N{r}", "values": [[f"=L{r}*M{r}"]]},
-            {"range": f"O{r}", "values": [[data.get("rate_usdt_rub", 79.7)]]},
+            {"range": f"O{r}", "values": [[_rate_cell(data)]]},
             {"range": f"P{r}", "values": [[f"=N{r}*O{r}"]]},
             {"range": f"Q{r}", "values": [[t["broker_rub"]]]},                     # Брокер
             {"range": f"R{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]}, # Таможня ТКС
@@ -304,7 +323,7 @@ def update_kult40_row(sheet_row: int, data: dict) -> None:
             {"range": f"H{r}", "values": [[data.get("vat", 1.19)]]},
             {"range": f"J{r}", "values": [[_buyback_cell(data, f"G{r}")]]},
             {"range": f"M{r}", "values": [[data.get("rate_eur_usdt", 1.1621)]]},
-            {"range": f"O{r}", "values": [[data.get("rate_usdt_rub", 79.7)]]},
+            {"range": f"O{r}", "values": [[_rate_cell(data)]]},
             {"range": f"R{r}", "values": [[data.get("evacuator_rub", 0) or 0]]},
             {"range": f"S{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]},
             {"range": f"T{r}", "values": [[util_fee(data)]]},
@@ -323,7 +342,7 @@ def update_msk_row(sheet_row: int, data: dict) -> None:
             {"range": f"H{r}", "values": [[data.get("vat", 1.19)]]},
             {"range": f"J{r}", "values": [[_buyback_cell(data, f"G{r}")]]},
             {"range": f"M{r}", "values": [[data.get("rate_eur_usdt", 1.1621)]]},
-            {"range": f"O{r}", "values": [[data.get("rate_usdt_rub", 79.7)]]},
+            {"range": f"O{r}", "values": [[_rate_cell(data)]]},
             {"range": f"R{r}", "values": [[data.get("customs_tks_rub", 0) or 0]]},
             {"range": f"S{r}", "values": [[util_fee(data)]]},
         ],
