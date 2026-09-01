@@ -125,7 +125,6 @@ CONTACT  = "@Aleksandr_Montaro"
     ADMIN_LIST,
     ADMIN_ADD_NAME,
     ADMIN_ADD_ID,
-    KP_PHOTO_EDIT,
     ASK_DIRECTION,       # 19 — choose sheet (minsk / kult40 / msk)
     ASK_EVACUATOR,       # 20 — Эвакуатор СПБ-МСК (Культ40 only)
     ASK_CUSTOMS_TKS,     # 21 — Таможня ТКС (Культ40 + МСК)
@@ -139,7 +138,7 @@ CONTACT  = "@Aleksandr_Montaro"
     ASK_UTIL_CHOICE,     # 29 — утиль: льготный или свой (Культ40 + МСК)
     ASK_UTIL_MANUAL,     # 30 — утиль: ввод суммы
     ASK_RATE,            # 31 — наценка к курсу дня
-) = range(32)
+) = range(31)
 
 # Порядок шагов расчёта — по нему кнопка «Назад» находит предыдущий экран.
 # У каждого направления свой набор вопросов, поэтому цепочки три.
@@ -352,6 +351,31 @@ async def _send_kp(chat_id: int, car_num: int, d: dict, bot) -> dict | None:
     return await send_kp(bot, chat_id, car_num, d)
 
 
+def _open_app_kb(draft_id: str = "") -> InlineKeyboardMarkup | None:
+    """
+    Кнопка «открыть приложение». Замена фото живёт только там: в чате
+    выбирать кадры кнопками было неудобно и путало сообщения.
+    """
+    if not WEB_APP_URL:
+        return None
+    url = f"{WEB_APP_URL}/?draft={draft_id}" if draft_id else WEB_APP_URL
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🖼 Открыть приложение", web_app=WebAppInfo(url=url)),
+    ]])
+
+
+async def _offer_app(bot, chat_id: int) -> None:
+    """Предложение заменить фото — одной кнопкой в приложение."""
+    kb = _open_app_kb()
+    if not kb:
+        return
+    await bot.send_message(
+        chat_id=chat_id,
+        text="Нужно заменить фото — откройте приложение:",
+        reply_markup=kb,
+    )
+
+
 # ── Выбор фото: мини-апп или автоподбор ──────────────────────────────────────
 
 def _photo_choice_kb(draft_id: str) -> InlineKeyboardMarkup:
@@ -380,18 +404,7 @@ async def _offer_photo_choice(chat_id: int, user_id: int, car_num: int, d: dict,
     data["car_num"] = car_num
 
     if not WEB_APP_URL:
-        kp = await _send_kp(chat_id, car_num, data, ctx.bot)
-        if kp:
-            ctx.user_data["_kp_edit"] = kp
-            await ctx.bot.send_message(
-                chat_id=chat_id,
-                text="Если нужно заменить фото в КП:",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✏️ Изменить фото", callback_data="kpedit:start"),
-                    InlineKeyboardButton("✅ Готово",         callback_data="kpedit:done"),
-                ]]),
-            )
-            return KP_PHOTO_EDIT
+        await _send_kp(chat_id, car_num, data, ctx.bot)
         return WAIT_URL
 
     draft_id = uuid.uuid4().hex[:12]
@@ -426,16 +439,7 @@ async def photo_choice_auto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     close_draft(draft_id)
 
     if kp:
-        ctx.user_data["_kp_edit"] = kp
-        await ctx.bot.send_message(
-            chat_id=rec["chat_id"],
-            text="Если нужно заменить фото в КП:",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✏️ Изменить фото", callback_data="kpedit:start"),
-                InlineKeyboardButton("✅ Готово",         callback_data="kpedit:done"),
-            ]]),
-        )
-        return KP_PHOTO_EDIT
+        await _offer_app(ctx.bot, rec["chat_id"])
     return WAIT_URL
 
 
@@ -1221,16 +1225,7 @@ async def history_edit_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         kp_chat = query.message.chat_id
         kp_result = await _send_kp(kp_chat, car_num, data, ctx.bot)
         if kp_result:
-            ctx.user_data["_kp_edit"] = kp_result
-            await ctx.bot.send_message(
-                chat_id=kp_chat,
-                text="Если нужно заменить фото в КП:",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✏️ Изменить фото", callback_data="kpedit:start"),
-                    InlineKeyboardButton("✅ Готово",         callback_data="kpedit:done"),
-                ]]),
-            )
-            return KP_PHOTO_EDIT
+            await _offer_app(ctx.bot, kp_chat)
         return HISTORY_LIST
 
     if action == "cancel":
@@ -1456,143 +1451,6 @@ async def pending_util(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     ctx.user_data.clear()
 
     return await _offer_photo_choice(chat_id, user.id, car_num, data_snapshot, ctx)
-
-
-# ── KP photo editing ──────────────────────────────────────────────────────────
-
-def _kp_selection_kb(n: int, selected: set[int], remaining: int) -> InlineKeyboardMarkup:
-    """Build photo-selection keyboard with toggle buttons and action row."""
-    rows: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for i in range(n):
-        label = f"✅ {i + 1}" if i in selected else str(i + 1)
-        row.append(InlineKeyboardButton(label, callback_data=f"kpedit:sel:{i}"))
-        if len(row) == 3:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-
-    sel_count = len(selected)
-    apply_label = (
-        f"🔄 Заменить ({sel_count})" if sel_count else "🔄 Заменить выбранные"
-    )
-    rows.append([
-        InlineKeyboardButton(apply_label, callback_data="kpedit:apply"),
-        InlineKeyboardButton("✅ Готово",  callback_data="kpedit:done"),
-    ])
-    return InlineKeyboardMarkup(rows)
-
-
-def _kp_selection_text(selected: set[int], remaining: int) -> str:
-    hint = "Нажми на номер — отметь ✅, нажми снова — снимет отметку." if not selected else \
-           f"Отмечено: {', '.join(str(i+1) for i in sorted(selected))}"
-    return (
-        f"Выберите фото для замены:\n"
-        f"{hint}\n"
-        f"<i>Доступно новых фото в галерее: {remaining}</i>"
-    )
-
-
-async def kp_edit_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle all kpedit: callbacks — toggle, apply, done."""
-    query = update.callback_query
-    await query.answer()
-    parts  = query.data.split(":")
-    action = parts[1]
-
-    kp = ctx.user_data.get("_kp_edit")
-
-    if action == "done":
-        ctx.user_data.pop("_kp_edit", None)
-        await query.edit_message_text("✅ КП готов.")
-        return WAIT_URL
-
-    if not kp:
-        # Набор фото хранится в памяти и не переживает перезапуск бота
-        await query.edit_message_text(
-            "⌛ Это КП уже не редактируется — бот перезапускался.\n"
-            "Откройте «📋 История» и отправьте КП заново."
-        )
-        return WAIT_URL
-
-    used    = kp["used_photos"]
-    shown   = kp["shown_photos"]
-    all_p   = kp["all_photos"]
-    msg_ids = kp["photo_msg_ids"]
-    chat_id = kp["chat_id"]
-    selected: set[int] = kp.setdefault("_selected", set())
-
-    # ── Show selection keyboard ───────────────────────────────────────────────
-    if action == "start":
-        selected.clear()
-        remaining = len([u for u in all_p if u not in shown])
-        await query.edit_message_text(
-            _kp_selection_text(selected, remaining),
-            parse_mode="HTML",
-            reply_markup=_kp_selection_kb(len(msg_ids), selected, remaining),
-        )
-        return KP_PHOTO_EDIT
-
-    # ── Toggle one photo ──────────────────────────────────────────────────────
-    if action == "sel":
-        idx = int(parts[2])
-        if idx in selected:
-            selected.discard(idx)
-        else:
-            selected.add(idx)
-        remaining = len([u for u in all_p if u not in shown])
-        await query.edit_message_text(
-            _kp_selection_text(selected, remaining),
-            parse_mode="HTML",
-            reply_markup=_kp_selection_kb(len(msg_ids), selected, remaining),
-        )
-        return KP_PHOTO_EDIT
-
-    # ── Apply replacements ────────────────────────────────────────────────────
-    if action == "apply":
-        if not selected:
-            await query.answer("Выберите хотя бы одно фото!", show_alert=True)
-            return KP_PHOTO_EDIT
-
-        caption     = kp.get("caption")
-        caption_idx = kp.get("caption_idx", 0)
-
-        replaced = 0
-        for idx in sorted(selected):
-            pool = [u for u in all_p if u not in shown]
-            if not pool:
-                break
-            new_url = pool[0]
-            # If replacing the photo that carries the caption, re-attach it
-            if caption and idx == caption_idx:
-                new_media = InputMediaPhoto(media=new_url, caption=caption, parse_mode="HTML")
-            else:
-                new_media = InputMediaPhoto(media=new_url)
-            try:
-                await ctx.bot.edit_message_media(
-                    chat_id=chat_id,
-                    message_id=msg_ids[idx],
-                    media=new_media,
-                )
-                used[idx] = new_url
-                shown.add(new_url)
-                replaced += 1
-            except Exception:
-                pass
-
-        selected.clear()
-        remaining = len([u for u in all_p if u not in shown])
-
-        status = f"✅ Заменено {replaced} фото." if replaced else "😕 Ничего не заменено."
-        await query.edit_message_text(
-            f"{status}\n\n" + _kp_selection_text(selected, remaining),
-            parse_mode="HTML",
-            reply_markup=_kp_selection_kb(len(msg_ids), selected, remaining),
-        )
-        return KP_PHOTO_EDIT
-
-    return KP_PHOTO_EDIT
 
 
 # ── /settings (admin only) ────────────────────────────────────────────────────
@@ -2258,7 +2116,6 @@ def build_application(token: str):
             CallbackQueryHandler(pending_pick,       pattern=r"^pending_pick:"),
             CallbackQueryHandler(photo_choice_auto,  pattern=r"^autokp:"),
             CallbackQueryHandler(photo_choice_skip,  pattern=r"^nokp:"),
-            CallbackQueryHandler(kp_edit_button,     pattern=r"^kpedit:"),
             MessageHandler(_link_filter, receive_url),
         ],
         states={
@@ -2362,9 +2219,6 @@ def build_application(token: str):
             HISTORY_EDIT_VALUE: [
                 CallbackQueryHandler(history_edit_pick, pattern=r"^hedit:"),
                 MessageHandler(_text, history_edit_value),
-            ],
-            KP_PHOTO_EDIT: [
-                CallbackQueryHandler(kp_edit_button, pattern=r"^kpedit:"),
             ],
             PHOTO_CHOICE: [
                 CallbackQueryHandler(photo_choice_auto, pattern=r"^autokp:"),
