@@ -9,7 +9,7 @@ from telegram import InputMediaPhoto
 from ai import build_options
 from calc import total_rub, util_is_reduced
 from kp import brand_candidates, build_kp_parts
-from storage import get_brand_emoji, get_float, get_optional
+from storage import get_brand_emoji, get_float, get_optional, get_setting
 
 CONTACT = "@Aleksandr_Montaro"
 
@@ -52,7 +52,11 @@ def pick_photos(all_photos: list[str]) -> list[str]:
     count  = int(get_float("img_count", 6)) or 6
     step   = max(1, int(get_float("img_step", 2)))
 
+    # Первое фото объявления — главное, оно же обложка альбома: даже если
+    # выборка идёт со смещением, начинаем с него
     idxs = list(range(offset, len(all_photos), step))[:count]
+    if idxs and idxs[0] != 0:
+        idxs = [0] + idxs[: count - 1]
     if len(idxs) < count:
         for i in range(offset, len(all_photos)):
             if i not in idxs:
@@ -88,6 +92,9 @@ async def build_captions(
 
     # Льготный утиль положен не всякой машине — от этого зависит подпись под ценой
     reduced = util_is_reduced(d)
+    # Страна и срок доставки — из настроек: от объявления они не зависят
+    country  = get_setting("kp_country") or ""
+    delivery = get_setting("kp_delivery") or ""
 
     with_emoji = build_kp_parts(
         d, total, options, car_num, contact,
@@ -97,12 +104,16 @@ async def build_captions(
         header_emoji_id=header_emoji_id,
         header_emoji_fallback=header_fallback,
         util_reduced=reduced,
+        country=country,
+        delivery=delivery,
     )
     plain = build_kp_parts(
         d, total, options, car_num, contact,
         brand_emoji_fallback=fallback,
         header_emoji_fallback=header_fallback,
         util_reduced=reduced,
+        country=country,
+        delivery=delivery,
     )
     return with_emoji, plain
 

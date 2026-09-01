@@ -3,22 +3,26 @@
 
 Шаблон (образец заказчика):
 
-    ДОСТУПЕН В ЕВРОПЕ 🇪🇺
+    🏷 #1285 | Mercedes-Benz G 400 d 4MATIC AMG Line 🚙
 
-    🟢 Skoda Superb Combi 1.5 TSI DSG Ambition
-
-    2022 / 31 000 км / 1.5 150 / Бензин
+    Год: 2022
+    Пробег: 5 900 км
+    Двигатель: 2.9 л дизель
+    Мощность: 330 л.с.
+    Привод: 4MATIC
+    Цвет: серебристый
+    Из Германии. Срок: 45 дней.
 
     Комплектация:
-    …опции…
+    ‹свёрнутый список опций›
+    Полное описание, вин код и дополнительные фото по запросу
 
-    💸3 000 000 руб.
+    💸18 524 000 руб.
     под ключ в МСК (включая прямую таможню и льготный утиль)
 
-    Связаться:
-    @Aleksandr_Montaro
+    ✈️ Заказать автомобиль
 
-    #679
+Главное видно сразу, длинная комплектация убрана в раскрывающуюся цитату.
 """
 import html
 import re
@@ -33,7 +37,7 @@ SAFE_LIMIT = 1010
 MESSAGE_LIMIT = 4096
 SAFE_MESSAGE_LIMIT = 4000
 
-BULLET = "* "
+BULLET = "– "
 # Последняя строка комплектации: список в КП не исчерпывающий
 MORE_LINE = "Полное описание, вин код и дополнительные фото по запросу"
 
@@ -69,36 +73,105 @@ def fmt_price_rub(v: float) -> str:
     return f"{fmt_thousands(rounded)} руб."
 
 
-def build_specs_line(d: dict) -> str:
-    """«2022 / 31 000 км / 1.5 150 / Бензин» — пропускаем то, чего нет."""
-    parts: list[str] = []
+# Хвост названия из объявления: «*LED*NAV*KAM*DISTR*», «,Navi,Burmester,STH»
+# — продавец набивает туда сокращения для поиска, клиенту это читать незачем
+_TITLE_CUT_RE = re.compile(r"[*|•!]|\s[-–—]{2,}")
+
+
+def clean_title(title: str) -> str:
+    """
+    Название в чистом виде: «Mercedes-Benz G 400 d 4MATIC AMG Line».
+
+    Режем по первому служебному символу и по запятой: в названии машины
+    запятых не бывает, а перечисление опций всегда начинается с неё.
+    """
+    name = _TITLE_CUT_RE.split(title or "", 1)[0]
+    name = name.split(",")[0]
+    name = re.sub(r"\s{2,}", " ", name)
+    return name.strip(" .,;-/+&")
+
+
+# Привод: в объявлении он лежит в чек-листе, а фирменное имя («4MATIC»,
+# «xDrive», «quattro») — в названии. Его и показываем, оно понятнее
+_DRIVE_BRANDS = ("4MATIC", "xDrive", "quattro", "4Matic", "4motion", "sDrive",
+                 "AllGrip", "4x4", "AWD")
+_DRIVE_WORDS = (
+    (("привод на четыре колеса", "полный привод", "allrad", "4wd", "awd"), "полный"),
+    (("задний привод", "hinterrad", "rwd"), "задний"),
+    (("передний привод", "vorderrad", "fwd"), "передний"),
+)
+
+
+def drive_of(d: dict) -> str:
+    """«4MATIC» / «полный» / «» — если в объявлении про привод ничего нет."""
+    title = d.get("title") or ""
+    for brand in _DRIVE_BRANDS:
+        if re.search(rf"(?<![A-Za-z]){re.escape(brand)}(?![A-Za-z])", title, re.I):
+            return brand
+    haystack = " ".join([title] + [str(f) for f in (d.get("features") or [])]).lower()
+    for words, name in _DRIVE_WORDS:
+        if any(w in haystack for w in words):
+            return name
+    return ""
+
+
+def build_spec_lines(d: dict, country: str = "", delivery: str = "") -> list[str]:
+    """
+    Характеристики отдельными строками. Чего в объявлении нет — того нет
+    и в КП: пустая строка «Привод: —» выглядит как недоработка.
+    """
+    lines: list[str] = []
 
     year = str(d.get("year") or "").strip()
     if year:
-        parts.append(year)
+        lines.append(f"Год: {year}")
 
     mileage = d.get("mileage")
-    if mileage is None:
-        pass
-    elif mileage == 0:
-        parts.append("новый")
-    else:
-        parts.append(f"{fmt_thousands(mileage)} км")
+    if mileage == 0:
+        lines.append("Пробег: новый")
+    elif mileage:
+        lines.append(f"Пробег: {fmt_thousands(mileage)} км")
 
     engine = d.get("engine_l")
-    power = d.get("power_hp")
-    if engine and power:
-        parts.append(f"{engine} {power}")
+    fuel = (d.get("fuel") or "").strip().lower()
+    if engine and fuel:
+        lines.append(f"Двигатель: {engine} л {fuel}")
     elif engine:
-        parts.append(str(engine))
-    elif power:
-        parts.append(f"{power} л.с.")
+        lines.append(f"Двигатель: {engine} л")
+    elif fuel:
+        lines.append(f"Двигатель: {fuel}")
 
-    fuel = (d.get("fuel") or "").strip()
-    if fuel:
-        parts.append(fuel)
+    power = d.get("power_hp")
+    if power:
+        lines.append(f"Мощность: {power} л.с.")
 
-    return " / ".join(parts)
+    drive = drive_of(d)
+    if drive:
+        lines.append(f"Привод: {drive}")
+
+    version = (d.get("country_version") or "").strip()
+    if version:
+        lines.append(f"Версия: {version}")
+
+    color = (d.get("color") or "").strip()
+    interior = (d.get("interior_color") or "").strip()
+    if color and interior:
+        lines.append(f"Цвет: {color.lower()} / салон {interior.lower()}")
+    elif color:
+        lines.append(f"Цвет: {color.lower()}")
+    elif interior:
+        lines.append(f"Салон: {interior}")
+
+    country = (country or "").strip()
+    delivery = (delivery or "").strip()
+    if country and delivery:
+        lines.append(f"Из {country}. Срок: {delivery}.")
+    elif country:
+        lines.append(f"Из {country}.")
+    elif delivery:
+        lines.append(f"Срок: {delivery}.")
+
+    return lines
 
 
 def car_title(d: dict) -> str:
@@ -172,6 +245,16 @@ def _by_value(options: list[str]) -> list[str]:
     return rich + basic
 
 
+def _order_link(contact: str) -> str:
+    """Кнопкой в подписи Telegram не обойтись — делаем ссылку на менеджера."""
+    contact = (contact or "").strip()
+    if contact.startswith("http"):
+        url = contact
+    else:
+        url = "https://t.me/" + contact.lstrip("@")
+    return f'✈️ <a href="{html.escape(url, quote=True)}">Заказать автомобиль</a>'
+
+
 def build_kp_parts(
     d: dict,
     total_rub: float,
@@ -184,51 +267,54 @@ def build_kp_parts(
     header_emoji_id: str | None = None,
     header_emoji_fallback: str = "🇪🇺",
     util_reduced: bool = True,
+    country: str = "",
+    delivery: str = "",
 ) -> list[str]:
     """
     Собирает КП — всегда одним сообщением, подписью к фото.
 
-    Комплектация приходит длиннее лимита подписи чаще, чем хотелось бы.
-    Вместо второго сообщения обрезаем список: сначала уходит базовое,
-    что есть у любой машины, ценные опции остаются.
+    Главное (название, характеристики, цена) видно сразу, комплектация
+    убрана в раскрывающуюся цитату Telegram. Если даже так не влезает
+    в лимит подписи, список режется: первым уходит базовое.
+
+    header_emoji_* больше не используются — шапки «ДОСТУПЕН В ЕВРОПЕ»
+    в шаблоне нет, но аргументы остались ради вызовов из бота и веб-API.
     """
     direction = d.get("direction", "minsk")
-    title = html.escape(car_title(d))
-    specs = build_specs_line(d)
+    title = html.escape(clean_title(car_title(d)))
     footer = PRICE_FOOTERS.get(direction, PRICE_FOOTERS["minsk"])
     if direction in ("kult40", "msk") and not util_reduced:
         footer = FULL_UTIL_FOOTER
 
-    # Эмодзи марки — справа от названия: слева он отжимает название от края
-    car_line = f"{title} {_emoji_tag(brand_emoji_id, brand_emoji_fallback)}"
-    price_line = f"{_emoji_tag(price_emoji_id, '💸')}{fmt_price_rub(total_rub)}"
+    # Номер лота — служебный, поэтому обычным текстом, а название жирным
+    car_line = (f"🏷 #{lot_number} | <b>{title}</b> "
+                f"{_emoji_tag(brand_emoji_id, brand_emoji_fallback)}")
+    price_line = f"<b>{_emoji_tag(price_emoji_id, '💸')}{fmt_price_rub(total_rub)}</b>"
 
-    header = f"ДОСТУПЕН В ЕВРОПЕ {_emoji_tag(header_emoji_id, header_emoji_fallback)}"
-    head = [header, "", car_line]
+    top = [car_line]
+    specs = build_spec_lines(d, country, delivery)
     if specs:
-        head += ["", specs]
+        top += [""] + specs
 
-    tail = ["", price_line, footer, "", "Связаться:", contact, "", f"#{lot_number}"]
+    tail = ["", price_line, footer, "", _order_link(contact)]
 
-    def bullets(opts: list[str]) -> list[str]:
-        return [BULLET + html.escape(o) for o in opts]
-
-    def wrap(lines: list[str]) -> str:
-        # Весь текст КП жирный — одной обёрткой, без вложенных тегов внутри
-        return "<b>" + "\n".join(lines) + "</b>"
+    def whole_of(o: list[str]) -> str:
+        if not o:
+            return "\n".join(top + tail)
+        quoted = "\n".join(BULLET + html.escape(x) for x in o)
+        body = [
+            "",
+            "Комплектация:",
+            f"<blockquote expandable>{quoted}</blockquote>",
+            MORE_LINE,
+        ]
+        return "\n".join(top + body + tail)
 
     opts = _by_value(options)
 
-    def whole_of(o: list[str]) -> str:
-        # Список всегда неполный — часть опций не влезает, часть срезана
-        # обрезкой. «И другое» в конце, чтобы клиент не принял его за всю
-        # комплектацию машины
-        body = ["", "Комплектация:"] + bullets(o) + [BULLET + MORE_LINE] if o else []
-        return wrap(head + body + tail)
-
-    # КП должно уходить одним сообщением: склеивать две части вручную
-    # менеджеру неудобно. Если не влезает — снимаем опции с конца,
-    # а конец здесь — самое базовое: подушки, ABS, стеклоподъёмники
+    # Даже свёрнутая комплектация считается в лимит подписи целиком:
+    # блок сворачивается только визуально. Не влезло — снимаем опции
+    # с конца, а конец здесь самое базовое: подушки, ABS, стеклоподъёмники
     text = whole_of(opts)
     while opts and tg_len(text) > SAFE_LIMIT:
         opts.pop()

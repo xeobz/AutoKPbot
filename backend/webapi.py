@@ -376,7 +376,9 @@ async def preview(req: PreviewReq, user: dict = Depends(current_user)):
 
     # Номер лота присваивается при записи в таблицу — в предпросмотре его ещё нет
     parts = build_kp_parts(d, total_rub(d), options, "—", CONTACT,
-                           util_reduced=util_is_reduced(d))
+                           util_reduced=util_is_reduced(d),
+                           country=get_setting("kp_country") or "",
+                           delivery=get_setting("kp_delivery") or "")
     # В предпросмотре показываем текст как его увидит клиент — без HTML-разметки
     plain = [html_lib.unescape(re.sub(r"<[^>]+>", "", p)) for p in parts]
     return {

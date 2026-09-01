@@ -301,6 +301,15 @@ def _extract_description(html: str) -> str:
     return html_to_text(block)[:DESCRIPTION_LIMIT]
 
 
+def _short_version(raw: str) -> str:
+    """Версия рынка коротко: «Транспортное средство ЕС» → «ЕС»."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    m = re.search(r"\b(ЕС|EU|США|USA|ОАЭ|Япони\w*|Швейцари\w*)\b", text, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
 def _extract_attributes(rsc: str) -> dict:
     attrs: dict[str, str] = {}
     for tag, value in _ATTR_RE.findall(rsc):
@@ -364,6 +373,8 @@ def _parse_html(html: str) -> dict:
         ),
         "fuel": normalise_fuel(attrs.get("fuel", "")),
         "gearbox": normalise_gearbox(attrs.get("transmission", "")),
+        # «Транспортное средство ЕС» → «ЕС»: в КП строка «Версия: ЕС»
+        "country_version": _short_version(attrs.get("countryVersion", "")),
     }
 
 
