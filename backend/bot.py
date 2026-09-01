@@ -141,6 +141,47 @@ CONTACT  = "@Aleksandr_Montaro"
     ASK_RATE,            # 31 — наценка к курсу дня
 ) = range(32)
 
+# Порядок шагов расчёта — по нему кнопка «Назад» находит предыдущий экран.
+# У каждого направления свой набор вопросов, поэтому цепочки три.
+STEP_CHAIN = {
+    "minsk":  [ASK_DIRECTION, ASK_RATE, ASK_COUNTERPARTY, ASK_VAT, ASK_BUYBACK,
+               ASK_CUSTOMS, ASK_UTIL, CONFIRM],
+    "kult40": [ASK_DIRECTION, ASK_RATE, ASK_COUNTERPARTY, ASK_VAT, ASK_BUYBACK,
+               ASK_EVACUATOR, ASK_CUSTOMS_TKS, ASK_UTIL_CHOICE, CONFIRM],
+    "msk":    [ASK_DIRECTION, ASK_RATE, ASK_COUNTERPARTY, ASK_VAT, ASK_BUYBACK,
+               ASK_CUSTOMS_TKS, ASK_UTIL_CHOICE, CONFIRM],
+}
+# Ручной ввод — ответвление от экрана с кнопками: назад ведёт к нему
+STEP_PARENT = {
+    ASK_VAT_MANUAL:     ASK_VAT,
+    ASK_BUYBACK_MANUAL: ASK_BUYBACK,
+    ASK_UTIL_MANUAL:    ASK_UTIL_CHOICE,
+}
+
+
+def _back_row(state: int) -> list:
+    """
+    Кнопка возврата. Номер шага несёт сама кнопка — так боту не нужно
+    помнить, где пользователь находится, и путаться после перезапуска.
+    """
+    return [InlineKeyboardButton("⬅️ Назад", callback_data=f"back:{state}")]
+
+
+def _back_kb(state: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([_back_row(state)])
+
+
+def _prev_step(ctx: ContextTypes.DEFAULT_TYPE, state: int) -> int | None:
+    """Предыдущий экран или None, если это самый первый шаг."""
+    if state in STEP_PARENT:
+        return STEP_PARENT[state]
+    chain = STEP_CHAIN.get(ctx.user_data.get("direction", "minsk"), STEP_CHAIN["minsk"])
+    if state not in chain:
+        return None
+    i = chain.index(state)
+    return chain[i - 1] if i > 0 else None
+
+
 # Адрес мини-аппа (https). Пусто — бот работает по-старому, без веба.
 WEB_APP_URL = os.getenv("WEB_APP_URL", "").rstrip("/")
 
@@ -262,6 +303,7 @@ def _build_buyback_keyboard(h: float) -> InlineKeyboardMarkup:
     buttons.append([InlineKeyboardButton(
         "✏️ Ввести сумму", callback_data="buyback:manual"
     )])
+    buttons.append(_back_row(ASK_BUYBACK))
     return InlineKeyboardMarkup(buttons)
 
 
@@ -568,21 +610,63 @@ async def receive_direction(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
         "price_eur": price,
     })
 
-    dir_label = {"minsk": "🏙 ЕС/Минск", "kult40": "🏭 ЕС/Культ40", "msk": "🌆 ЕС-МСК"}.get(direction, direction)
-    base = float(ctx.user_data.get("rate_usdt_rub", 0) or 0)
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"{label} → {base * mk:.2f} ₽", callback_data=f"rate:{mk}")]
-        for label, mk in RATE_MARKUPS
-    ])
-    await query.edit_message_text(
-        f"✅ Нашёл: <b>{car_name}</b>  ·  {dir_label}\n"
-        f"💶 Цена: <b>{fmt_eur(price)}</b>\n\n"
+    await _show_rate_step(query.edit_message_text, ctx)
+    return ASK_RATE
+
+
+DIR_LABELS = {"minsk": "🏙 ЕС/Минск", "kult40": "🏭 ЕС/Культ40", "msk": "🌆 ЕС-МСК"}
+
+
+def _direction_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🏙 ЕС/Минск",  callback_data="dir:minsk"),
+        InlineKeyboardButton("🏭 Культ40",   callback_data="dir:kult40"),
+        InlineKeyboardButton("🌆 ЕС-МСК",    callback_data="dir:msk"),
+    ]])
+
+
+async def _show_rate_step(reply, ctx: ContextTypes.DEFAULT_TYPE):
+    """Экран выбора наценки к курсу — рисуется и при заходе, и при возврате."""
+    d = ctx.user_data
+    base = float(d.get("rate_usdt_base") or d.get("rate_usdt_rub", 0) or 0)
+    rows = [[InlineKeyboardButton(f"{label} → {base * mk:.2f} ₽",
+                                  callback_data=f"rate:{mk}")]
+            for label, mk in RATE_MARKUPS]
+    rows.append(_back_row(ASK_RATE))
+    return await reply(
+        f"✅ Нашёл: <b>{d.get('car_name', '')}</b>  ·  "
+        f"{DIR_LABELS.get(d.get('direction', ''), '')}\n"
+        f"💶 Цена: <b>{fmt_eur(d.get('price_eur', 0))}</b>\n\n"
         f"📈 Курс с утра: <b>{base:g} ₽</b> за USDT\n"
         f"Выберите <b>наценку</b>:",
-        reply_markup=kb,
+        reply_markup=InlineKeyboardMarkup(rows),
         parse_mode="HTML",
     )
-    return ASK_RATE
+
+
+def _vat_kb() -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(label, callback_data=f"vat:{val}")]
+            for label, val in VAT_OPTIONS]
+    rows.append([InlineKeyboardButton("✏️ Свой процент", callback_data="vat:custom")])
+    rows.append(_back_row(ASK_VAT))
+    return InlineKeyboardMarkup(rows)
+
+
+def _util_kb() -> InlineKeyboardMarkup:
+    reduced = get_float("util_fixed_rub", 5200)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"♻️ Льготный — {fmt_rub(reduced)}", callback_data="util:fixed")],
+        [InlineKeyboardButton("✏️ Ввести сумму", callback_data="util:custom")],
+        _back_row(ASK_UTIL_CHOICE),
+    ])
+
+
+def _confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Записать в таблицу", callback_data="confirm:yes"),
+         InlineKeyboardButton("✏️ Начать заново",      callback_data="confirm:no")],
+        _back_row(CONFIRM),
+    ])
 
 
 async def receive_rate_markup(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -600,6 +684,7 @@ async def receive_rate_markup(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         f"✅ Курс: <b>{base:g} ₽</b> +{(markup - 1) * 100:g}% → "
         f"<b>{ctx.user_data['rate_usdt_rub']:g} ₽</b>\n\n"
         f"Введите имя <b>контрагента</b>:",
+        reply_markup=_back_kb(ASK_COUNTERPARTY),
         parse_mode="HTML",
     )
     return ASK_COUNTERPARTY
@@ -617,12 +702,7 @@ async def receive_counterparty(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
 
     ctx.user_data["counterparty"] = f"{counterparty}({manager})"
 
-    rows = [
-        [InlineKeyboardButton(label, callback_data=f"vat:{val}")]
-        for label, val in VAT_OPTIONS
-    ]
-    rows.append([InlineKeyboardButton("✏️ Свой процент", callback_data="vat:custom")])
-    kb = InlineKeyboardMarkup(rows)
+    kb = _vat_kb()
     await update.message.reply_text(
         f"👤 Контрагент: <b>{counterparty}({manager})</b>\n\n"
         "Выберите <b>НДС</b> страны продавца:",
@@ -660,6 +740,7 @@ async def receive_vat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await query.edit_message_text(
             "Введите <b>процент НДС</b> числом.\n"
             "<i>Например: 23. Если НДС нет — 0.</i>",
+            reply_markup=_back_kb(ASK_VAT_MANUAL),
             parse_mode="HTML",
         )
         return ASK_VAT_MANUAL
@@ -701,6 +782,7 @@ async def _after_buyback(update_or_query, ctx: ContextTypes.DEFAULT_TYPE, label:
         await reply(
             f"✅ Выкуп <b>{label}</b> → <b>{fmt_eur(k)}</b>\n\n"
             f"Введите <b>стоимость эвакуатора СПБ-МСК</b> (руб.):",
+            reply_markup=_back_kb(ASK_EVACUATOR),
             parse_mode="HTML",
         )
         return ASK_EVACUATOR
@@ -709,14 +791,16 @@ async def _after_buyback(update_or_query, ctx: ContextTypes.DEFAULT_TYPE, label:
         await reply(
             f"✅ Выкуп <b>{label}</b> → <b>{fmt_eur(k)}</b>\n\n"
             f"Введите <b>таможню ТКС</b> (руб.):",
+            reply_markup=_back_kb(ASK_CUSTOMS_TKS),
             parse_mode="HTML",
         )
         return ASK_CUSTOMS_TKS
 
     # minsk — исходный флоу
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("⏸ Отложить — введу позже", callback_data="customs:defer")
-    ]])
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏸ Отложить — введу позже", callback_data="customs:defer")],
+        _back_row(ASK_CUSTOMS),
+    ])
     await reply(
         f"✅ Выкуп <b>{label}</b> → K = <b>{fmt_eur(k)}</b>\n\n"
         f"Введите <b>таможню РБ</b> в EUR\n(или нажмите «Отложить»):",
@@ -740,6 +824,7 @@ async def receive_buyback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         await query.edit_message_text(
             f"НЕТТО: <b>{fmt_eur(h)}</b>\n\n"
             f"Введите <b>сумму выкупа</b> в EUR (например: 3200):",
+            reply_markup=_back_kb(ASK_BUYBACK_MANUAL),
             parse_mode="HTML",
         )
         return ASK_BUYBACK_MANUAL
@@ -780,6 +865,7 @@ async def receive_evacuator(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_text(
         f"✅ Эвакуатор: <b>{fmt_rub(val)}</b>\n\n"
         f"Введите <b>таможню ТКС</b> (руб.):",
+        reply_markup=_back_kb(ASK_CUSTOMS_TKS),
         parse_mode="HTML",
     )
     return ASK_CUSTOMS_TKS
@@ -803,14 +889,9 @@ async def _ask_util(reply, ctx: ContextTypes.DEFAULT_TYPE, done: str) -> int:
     Экран утиля. Льготный положен не всякой машине, поэтому спрашиваем,
     а не подставляем молча.
     """
-    reduced = get_float("util_fixed_rub", 5200)
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"♻️ Льготный — {fmt_rub(reduced)}", callback_data="util:fixed")],
-        [InlineKeyboardButton("✏️ Ввести сумму", callback_data="util:custom")],
-    ])
     await reply(
         f"{done}\n\nВыберите <b>утильсбор</b>:",
-        reply_markup=kb,
+        reply_markup=_util_kb(),
         parse_mode="HTML",
     )
     return ASK_UTIL_CHOICE
@@ -819,10 +900,7 @@ async def _ask_util(reply, ctx: ContextTypes.DEFAULT_TYPE, done: str) -> int:
 async def _after_util(reply, ctx: ContextTypes.DEFAULT_TYPE, val: float) -> int:
     """Утиль выбран — показываем карточку расчёта."""
     ctx.user_data["util_rub"] = val
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Записать в таблицу", callback_data="confirm:yes"),
-        InlineKeyboardButton("✏️ Начать заново",      callback_data="confirm:no"),
-    ]])
+    kb = _confirm_kb()
     await reply(
         _build_card(ctx.user_data),
         reply_markup=kb,
@@ -841,6 +919,7 @@ async def receive_util_choice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(
             "Введите <b>сумму утильсбора</b> (руб.).\n"
             "<i>Например: 3 400 или 844 800</i>",
+            reply_markup=_back_kb(ASK_UTIL_MANUAL),
             parse_mode="HTML",
         )
         return ASK_UTIL_MANUAL
@@ -858,6 +937,102 @@ async def receive_util_manual(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         return ASK_UTIL_MANUAL
 
     return await _after_util(update.message.reply_text, ctx, val)
+
+
+async def _show_step(state: int, reply, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Рисует экран нужного шага заново — по нему и работает «Назад»."""
+    d = ctx.user_data
+
+    if state == ASK_DIRECTION:
+        await reply("Выберите <b>направление</b>:",
+                    reply_markup=_direction_kb(), parse_mode="HTML")
+        return ASK_DIRECTION
+
+    if state == ASK_RATE:
+        await _show_rate_step(reply, ctx)
+        return ASK_RATE
+
+    if state == ASK_COUNTERPARTY:
+        await reply("Введите имя <b>контрагента</b>:",
+                    reply_markup=_back_kb(ASK_COUNTERPARTY), parse_mode="HTML")
+        return ASK_COUNTERPARTY
+
+    if state == ASK_VAT:
+        await reply("Выберите <b>НДС</b> страны продавца:",
+                    reply_markup=_vat_kb(), parse_mode="HTML")
+        return ASK_VAT
+
+    if state == ASK_BUYBACK:
+        h = float(d.get("price_eur", 0)) / float(d.get("vat", 1) or 1)
+        await reply(f"НЕТТО: <b>{fmt_eur(h)}</b>\n\nВыберите <b>процент выкупа</b>:",
+                    reply_markup=_build_buyback_keyboard(h), parse_mode="HTML")
+        return ASK_BUYBACK
+
+    if state == ASK_CUSTOMS:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⏸ Отложить — введу позже", callback_data="customs:defer")],
+            _back_row(ASK_CUSTOMS),
+        ])
+        await reply("Введите <b>таможню РБ</b> в EUR\n(или нажмите «Отложить»):",
+                    reply_markup=kb, parse_mode="HTML")
+        return ASK_CUSTOMS
+
+    if state == ASK_UTIL:
+        await reply("Введите <b>утиль</b> (руб.):",
+                    reply_markup=_back_kb(ASK_UTIL), parse_mode="HTML")
+        return ASK_UTIL
+
+    if state == ASK_EVACUATOR:
+        await reply("Введите <b>стоимость эвакуатора СПБ-МСК</b> (руб.):",
+                    reply_markup=_back_kb(ASK_EVACUATOR), parse_mode="HTML")
+        return ASK_EVACUATOR
+
+    if state == ASK_CUSTOMS_TKS:
+        await reply("Введите <b>таможню ТКС</b> (руб.):",
+                    reply_markup=_back_kb(ASK_CUSTOMS_TKS), parse_mode="HTML")
+        return ASK_CUSTOMS_TKS
+
+    if state == ASK_UTIL_CHOICE:
+        await reply("Выберите <b>утильсбор</b>:",
+                    reply_markup=_util_kb(), parse_mode="HTML")
+        return ASK_UTIL_CHOICE
+
+    if state == ASK_VAT_MANUAL:
+        await reply("Введите <b>процент НДС</b> числом:",
+                    reply_markup=_back_kb(ASK_VAT_MANUAL), parse_mode="HTML")
+        return ASK_VAT_MANUAL
+
+    if state == ASK_BUYBACK_MANUAL:
+        await reply("Введите <b>сумму выкупа</b> в EUR:",
+                    reply_markup=_back_kb(ASK_BUYBACK_MANUAL), parse_mode="HTML")
+        return ASK_BUYBACK_MANUAL
+
+    if state == ASK_UTIL_MANUAL:
+        await reply("Введите <b>сумму утильсбора</b> (руб.):",
+                    reply_markup=_back_kb(ASK_UTIL_MANUAL), parse_mode="HTML")
+        return ASK_UTIL_MANUAL
+
+    if state == CONFIRM:
+        await reply(_build_card(d), reply_markup=_confirm_kb(),
+                    parse_mode="HTML", disable_web_page_preview=True)
+        return CONFIRM
+
+    return state
+
+
+async def go_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Шаг назад. Номер текущего экрана приходит в самой кнопке, поэтому
+    возврат работает и после перезапуска бота — состояние помнить не нужно.
+    """
+    query = update.callback_query
+    here  = int(query.data.split(":")[1])
+    prev  = _prev_step(ctx, here)
+    if prev is None:
+        await query.answer("Это первый шаг", show_alert=False)
+        return here
+    await query.answer()
+    return await _show_step(prev, query.edit_message_text, ctx)
 
 
 # ── Step 5: customs ───────────────────────────────────────────────────────────
@@ -892,6 +1067,7 @@ async def receive_customs_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE) 
     ctx.user_data["customs_eur"] = customs
     await update.message.reply_text(
         f"✅ Таможня: <b>{fmt_eur(customs)}</b>\n\nВведите <b>утиль</b> (руб.):",
+        reply_markup=_back_kb(ASK_UTIL),
         parse_mode="HTML",
     )
     return ASK_UTIL
@@ -907,10 +1083,7 @@ async def receive_util(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     ctx.user_data["util_rub"] = util
     d  = ctx.user_data
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Записать в таблицу", callback_data="confirm:yes"),
-        InlineKeyboardButton("✏️ Начать заново",      callback_data="confirm:no"),
-    ]])
+    kb = _confirm_kb()
     await update.message.reply_text(
         _build_card(d),
         reply_markup=kb,
@@ -2102,43 +2275,56 @@ def build_application(token: str):
                 CallbackQueryHandler(receive_direction, pattern=r"^dir:"),
             ],
             ASK_RATE: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 CallbackQueryHandler(receive_rate_markup, pattern=r"^rate:"),
             ],
             ASK_COUNTERPARTY: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 MessageHandler(_text, receive_counterparty),
             ],
             ASK_VAT: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 CallbackQueryHandler(receive_vat, pattern=r"^vat:"),
             ],
             ASK_VAT_MANUAL: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 MessageHandler(_text, receive_vat_manual),
             ],
             ASK_BUYBACK: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 CallbackQueryHandler(receive_buyback, pattern=r"^buyback:"),
             ],
             ASK_BUYBACK_MANUAL: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 MessageHandler(_text, receive_buyback_manual),
             ],
             ASK_CUSTOMS: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 CallbackQueryHandler(receive_customs_defer, pattern=r"^customs:defer$"),
                 MessageHandler(_text, receive_customs_value),
             ],
             ASK_UTIL: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 MessageHandler(_text, receive_util),
             ],
             ASK_UTIL_CHOICE: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 CallbackQueryHandler(receive_util_choice, pattern=r"^util:"),
             ],
             ASK_UTIL_MANUAL: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 MessageHandler(_text, receive_util_manual),
             ],
             ASK_EVACUATOR: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 MessageHandler(_text, receive_evacuator),
             ],
             ASK_CUSTOMS_TKS: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 MessageHandler(_text, receive_customs_tks),
             ],
             CONFIRM: [
+                CallbackQueryHandler(go_back, pattern=r"^back:"),
                 CallbackQueryHandler(receive_confirm, pattern=r"^confirm:"),
             ],
             SETTINGS_MENU: [
