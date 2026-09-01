@@ -1560,7 +1560,9 @@ async def settings_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     if key == "brands":
         return await _show_brand_list(query, ctx)
 
-    if key in ("rates", "tariffs", "photo"):
+    # Разделы берём из самих настроек: раздел «Комплектация» добавили,
+    # а в этот список забыли — кнопка молча возвращала в меню
+    if key in {item[2] for item in _EDITABLE.values()}:
         return await _show_section(query, key)
 
     if key == "img_debug":

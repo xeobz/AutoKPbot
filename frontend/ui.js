@@ -10,6 +10,9 @@ export function h(tag, props = {}, ...children) {
     else if (k === 'html') el.innerHTML = v; // только для своей разметки, не для данных с сервера
     else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
     else if (k === 'dataset') Object.assign(el.dataset, v);
+    // value у полей ввода — свойство, а не атрибут: у <textarea> атрибута
+    // value нет вовсе, и поле рисовалось пустым, сколько в него ни пиши
+    else if (k === 'value' && (tag === 'input' || tag === 'textarea' || tag === 'select')) el.value = v;
     else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
     else if (v === true) el.setAttribute(k, '');
     else el.setAttribute(k, v);
