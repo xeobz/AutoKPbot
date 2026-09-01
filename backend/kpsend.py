@@ -18,6 +18,12 @@ CONTACT = "@Aleksandr_Montaro"
 log = logging.getLogger("autokp.kp")
 
 
+def delivery_for(d: dict) -> str:
+    """Срок доставки: у ЕС-МСК свой, остальные направления идут по общему."""
+    key = "kp_delivery_msk" if d.get("direction") == "msk" else "kp_delivery"
+    return get_setting(key) or ""
+
+
 def _telegram_photo(url: str) -> str:
     """
     Ссылка на фото для Telegram: покрупнее и обязательно jpeg.
@@ -94,7 +100,7 @@ async def build_captions(
     reduced = util_is_reduced(d)
     # Страна и срок доставки — из настроек: от объявления они не зависят
     country  = get_setting("kp_country") or ""
-    delivery = get_setting("kp_delivery") or ""
+    delivery = delivery_for(d)
 
     with_emoji = build_kp_parts(
         d, total, options, car_num, contact,

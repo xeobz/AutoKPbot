@@ -46,7 +46,7 @@ from calc import (
     util_is_reduced,
 )
 from kp import CAPTION_LIMIT, build_kp_parts, tg_len
-from kpsend import CONTACT, build_captions, pick_photos, send_kp
+from kpsend import CONTACT, build_captions, delivery_for, pick_photos, send_kp
 from scraper import find_listing_url, scrape
 from sheets import append_car_row, append_kult40_row, append_msk_row, update_car_row
 from storage import (
@@ -378,7 +378,7 @@ async def preview(req: PreviewReq, user: dict = Depends(current_user)):
     parts = build_kp_parts(d, total_rub(d), options, "—", CONTACT,
                            util_reduced=util_is_reduced(d),
                            country=get_setting("kp_country") or "",
-                           delivery=get_setting("kp_delivery") or "")
+                           delivery=delivery_for(d))
     # В предпросмотре показываем текст как его увидит клиент — без HTML-разметки
     plain = [html_lib.unescape(re.sub(r"<[^>]+>", "", p)) for p in parts]
     return {
