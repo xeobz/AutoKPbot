@@ -91,24 +91,49 @@ def clean_title(title: str) -> str:
     return name.strip(" .,;-/+&")
 
 
-# Привод: в объявлении он лежит в чек-листе, а фирменное имя («4MATIC»,
-# «xDrive», «quattro») — в названии. Его и показываем, оно понятнее
-_DRIVE_BRANDS = ("4MATIC", "xDrive", "quattro", "4Matic", "4motion", "sDrive",
-                 "AllGrip", "4x4", "AWD")
+# Привод. Отдельным полем mobile.de его не отдаёт — «Тип привода» в
+# карточке это тип двигателя, а не трансмиссия. Зато фирменное имя почти
+# всегда стоит в названии, реже — в чек-листе или описании продавца.
+_DRIVE_PATTERNS = [
+    (r"4MATIC", "4MATIC"),
+    (r"xDrive", "xDrive"),
+    (r"sDrive", "sDrive"),
+    (r"quattro", "quattro"),
+    (r"4MOTION", "4MOTION"),
+    (r"AllGrip", "AllGrip"),
+    (r"(?<![A-Za-z0-9])4x4(?![A-Za-z0-9])", "4x4"),
+    (r"(?<![A-Za-z0-9])(?:AWD|4WD)(?![A-Za-z0-9])", "полный"),
+]
+# У Mercedes 4MATIC часто сокращают до «4M»: «V 300d 4M EXTRALONG».
+# У других марок такое сокращение значит что угодно, поэтому только здесь
+_MERCEDES_4M = r"(?<![A-Za-z0-9])4M(?![A-Za-z0-9])"
+
 _DRIVE_WORDS = (
-    (("привод на четыре колеса", "полный привод", "allrad", "4wd", "awd"), "полный"),
-    (("задний привод", "hinterrad", "rwd"), "задний"),
-    (("передний привод", "vorderrad", "fwd"), "передний"),
+    (("привод на четыре колеса", "полный привод", "allrad", "4wd", "awd",
+      "all wheel drive", "four wheel drive"), "полный"),
+    (("задний привод", "hinterrad", "rwd", "rear wheel drive"), "задний"),
+    (("передний привод", "vorderrad", "fwd", "front wheel drive"), "передний"),
 )
 
 
 def drive_of(d: dict) -> str:
     """«4MATIC» / «полный» / «» — если в объявлении про привод ничего нет."""
     title = d.get("title") or ""
-    for brand in _DRIVE_BRANDS:
-        if re.search(rf"(?<![A-Za-z]){re.escape(brand)}(?![A-Za-z])", title, re.I):
-            return brand
-    haystack = " ".join([title] + [str(f) for f in (d.get("features") or [])]).lower()
+    # Название — самый надёжный источник: там имя комплектации от завода
+    for pattern, name in _DRIVE_PATTERNS:
+        if re.search(pattern, title, re.IGNORECASE):
+            return name
+    if "mercedes" in title.lower() and re.search(_MERCEDES_4M, title, re.IGNORECASE):
+        return "4MATIC"
+
+    # Дальше — чек-лист и описание продавца
+    extra = " ".join([str(f) for f in (d.get("features") or [])]
+                     + [str(d.get("description") or "")])
+    for pattern, name in _DRIVE_PATTERNS:
+        if re.search(pattern, extra, re.IGNORECASE):
+            return name
+
+    haystack = (title + " " + extra).lower()
     for words, name in _DRIVE_WORDS:
         if any(w in haystack for w in words):
             return name
