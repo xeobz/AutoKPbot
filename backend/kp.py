@@ -174,9 +174,11 @@ def build_spec_lines(d: dict, country: str = "", delivery: str = "") -> list[str
     if drive:
         lines.append(f"Привод: {drive}")
 
-    version = (d.get("country_version") or "").strip()
-    if version:
-        lines.append(f"Версия: {version}")
+    gearbox = (d.get("gearbox") or "").strip().lower()
+    if gearbox:
+        # normalise_gearbox отдаёт «Автомат» / «Механика» — в КП пишем словом
+        name = {"автомат": "автоматическая", "механика": "механическая"}.get(gearbox, gearbox)
+        lines.append(f"Коробка: {name}")
 
     color = (d.get("color") or "").strip()
     interior = (d.get("interior_color") or "").strip()
@@ -270,14 +272,19 @@ def _by_value(options: list[str]) -> list[str]:
     return rich + basic
 
 
-def _order_link(contact: str) -> str:
-    """Кнопкой в подписи Telegram не обойтись — делаем ссылку на менеджера."""
+def _order_link(contact: str, emoji_id: str | None = None,
+                emoji_fallback: str = "✈️") -> str:
+    """
+    Кнопкой в подписи Telegram не обойтись — делаем ссылку на менеджера.
+    Эмодзи держим снаружи ссылки: внутри <a> премиум-эмодзи не отображается.
+    """
     contact = (contact or "").strip()
     if contact.startswith("http"):
         url = contact
     else:
         url = "https://t.me/" + contact.lstrip("@")
-    return f'✈️ <a href="{html.escape(url, quote=True)}">Заказать автомобиль</a>'
+    tag = _emoji_tag(emoji_id, emoji_fallback)
+    return f'{tag} <a href="{html.escape(url, quote=True)}">Заказать автомобиль</a>'
 
 
 def build_kp_parts(
@@ -294,6 +301,10 @@ def build_kp_parts(
     util_reduced: bool = True,
     country: str = "",
     delivery: str = "",
+    lot_emoji_id: str | None = None,
+    lot_emoji_fallback: str = "🏷",
+    order_emoji_id: str | None = None,
+    order_emoji_fallback: str = "✈️",
 ) -> list[str]:
     """
     Собирает КП — всегда одним сообщением, подписью к фото.
@@ -312,8 +323,8 @@ def build_kp_parts(
         footer = FULL_UTIL_FOOTER
 
     # Номер лота — служебный, поэтому обычным текстом, а название жирным
-    car_line = (f"🏷 #{lot_number} | <b>{title}</b> "
-                f"{_emoji_tag(brand_emoji_id, brand_emoji_fallback)}")
+    car_line = (f"{_emoji_tag(lot_emoji_id, lot_emoji_fallback)} #{lot_number} | "
+                f"<b>{title}</b> {_emoji_tag(brand_emoji_id, brand_emoji_fallback)}")
     price_line = f"<b>{_emoji_tag(price_emoji_id, '💸')}{fmt_price_rub(total_rub)}</b>"
 
     top = [car_line]
@@ -321,7 +332,8 @@ def build_kp_parts(
     if specs:
         top += [""] + specs
 
-    tail = ["", price_line, footer, "", _order_link(contact)]
+    tail = ["", price_line, footer, "",
+            _order_link(contact, order_emoji_id, order_emoji_fallback)]
 
     def whole_of(o: list[str]) -> str:
         if not o:

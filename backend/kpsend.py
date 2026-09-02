@@ -93,6 +93,10 @@ async def build_captions(
             break
     fallback = (rec or {}).get("emoji") or "🚗"
     price_emoji_id  = get_optional("price_emoji_id")
+    lot_emoji_id    = get_optional("lot_emoji_id")
+    lot_fallback    = get_optional("lot_emoji") or "🏷"
+    order_emoji_id  = get_optional("order_emoji_id")
+    order_fallback  = get_optional("order_emoji") or "✈️"
     header_emoji_id = get_optional("header_emoji_id")
     header_fallback = get_optional("header_emoji") or "🇪🇺"
 
@@ -112,6 +116,10 @@ async def build_captions(
         util_reduced=reduced,
         country=country,
         delivery=delivery,
+        lot_emoji_id=lot_emoji_id,
+        lot_emoji_fallback=lot_fallback,
+        order_emoji_id=order_emoji_id,
+        order_emoji_fallback=order_fallback,
     )
     plain = build_kp_parts(
         d, total, options, car_num, contact,
@@ -120,6 +128,8 @@ async def build_captions(
         util_reduced=reduced,
         country=country,
         delivery=delivery,
+        lot_emoji_fallback=lot_fallback,
+        order_emoji_fallback=order_fallback,
     )
     return with_emoji, plain
 

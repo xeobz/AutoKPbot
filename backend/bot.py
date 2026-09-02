@@ -1793,13 +1793,16 @@ async def _show_brand_list(query_or_message, ctx: ContextTypes.DEFAULT_TYPE) -> 
     else:
         lines.append("<i>Пока ничего не добавлено.</i>")
 
-    header_id = get_optional("header_emoji_id")
+    lot_id   = get_optional("lot_emoji_id")
+    order_id = get_optional("order_emoji_id")
     lines.append(f"\n💸 Эмодзи у цены: <b>{'задан' if price_id else 'обычный 💸'}</b>")
-    lines.append(f"🇪🇺 Эмодзи заголовка: <b>{'задан' if header_id else 'обычный 🇪🇺'}</b>")
+    lines.append(f"🏷 Эмодзи у номера: <b>{'задан' if lot_id else 'обычный 🏷'}</b>")
+    lines.append(f"✈️ Эмодзи у заказа: <b>{'задан' if order_id else 'обычный ✈️'}</b>")
 
-    rows.append([InlineKeyboardButton("➕ Добавить марку",   callback_data="brand:add")])
-    rows.append([InlineKeyboardButton("💸 Эмодзи цены",      callback_data="brand:price")])
-    rows.append([InlineKeyboardButton("🇪🇺 Эмодзи заголовка", callback_data="brand:header")])
+    rows.append([InlineKeyboardButton("➕ Добавить марку",  callback_data="brand:add")])
+    rows.append([InlineKeyboardButton("💸 Эмодзи цены",     callback_data="brand:price")])
+    rows.append([InlineKeyboardButton("🏷 Эмодзи номера",   callback_data="brand:lot")])
+    rows.append([InlineKeyboardButton("✈️ Эмодзи заказа",   callback_data="brand:order")])
     rows.append([InlineKeyboardButton("◀️ Назад",            callback_data="brand:back")])
 
     await _reply(query_or_message, "\n".join(lines), InlineKeyboardMarkup(rows))
@@ -1818,11 +1821,21 @@ async def brand_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         remove_brand_emoji(action[2])
         return await _show_brand_list(query, ctx)
 
-    if action[1] == "header":
-        ctx.user_data["_brand_target"] = "_header"
+    if action[1] == "lot":
+        ctx.user_data["_brand_target"] = "_lot"
         await query.edit_message_text(
-            "🇪🇺 Пришлите <b>премиум-эмодзи</b> для первой строки КП — "
-            "он встанет после «ДОСТУПЕН В ЕВРОПЕ».\n\n"
+            "🏷 Пришлите <b>премиум-эмодзи</b> для начала КП — "
+            "он стоит перед номером лота.\n\n"
+            "<i>Просто отправьте его сообщением — бот запомнит.</i>",
+            parse_mode="HTML",
+        )
+        return BRAND_AWAIT_EMOJI
+
+    if action[1] == "order":
+        ctx.user_data["_brand_target"] = "_order"
+        await query.edit_message_text(
+            "✈️ Пришлите <b>премиум-эмодзи</b> для последней строки КП — "
+            "он стоит перед «Заказать автомобиль».\n\n"
             "<i>Просто отправьте его сообщением — бот запомнит.</i>",
             parse_mode="HTML",
         )
@@ -1895,10 +1908,14 @@ async def brand_receive_emoji(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         set_setting("price_emoji_id", emoji_id)
         set_setting("price_emoji", char)
         await update.message.reply_text(f"✅ Эмодзи цены сохранён: {char}")
-    elif target == "_header":
-        set_setting("header_emoji_id", emoji_id)
-        set_setting("header_emoji", char)
-        await update.message.reply_text(f"✅ Эмодзи заголовка сохранён: {char}")
+    elif target == "_lot":
+        set_setting("lot_emoji_id", emoji_id)
+        set_setting("lot_emoji", char)
+        await update.message.reply_text(f"✅ Эмодзи номера сохранён: {char}")
+    elif target == "_order":
+        set_setting("order_emoji_id", emoji_id)
+        set_setting("order_emoji", char)
+        await update.message.reply_text(f"✅ Эмодзи заказа сохранён: {char}")
     else:
         set_brand_emoji(target, emoji_id, char, user.first_name or "")
         await update.message.reply_text(
