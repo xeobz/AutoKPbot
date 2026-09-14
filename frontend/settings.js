@@ -1,10 +1,10 @@
 // Экран «Настройки» (только админ): разделы с полями, отдельный блок «Курс дня».
-import { api } from './api.js?v=3';
+import { api } from './api.js?v=4';
 import {
   h, frag, icon, toNum, toast,
   stateLoading, stateEmpty, stateError, errBox, keepFocus,
-} from './ui.js?v=3';
-import { haptic, mainButton } from './tg.js?v=3';
+} from './ui.js?v=4';
+import { haptic, mainButton } from './tg.js?v=4';
 
 let st = {
   data: null, loading: false, error: '',
@@ -12,6 +12,8 @@ let st = {
   savingKey: null,
   rates: null,     // {eur, usdt} — заполняем при первой отрисовке
   ratesSaving: false, ratesError: '',
+  // Ключ OpenRouter: с сервера приходит только маска, сам ключ — никогда
+  aiKey: null, aiKeyInput: '', aiKeySaving: false, aiKeyError: '',
 };
 let mountRoot = null;
 let meRef = null;
@@ -41,6 +43,7 @@ async function load() {
       for (const it of (s.items || [])) st.values[it.key] = it.value ?? '';
     }
     st.rates = null; // перечитаем из свежих данных
+    st.aiKey = await api.aiKey().catch(() => null);
   } catch (e) {
     st.error = e.message;
   } finally {
@@ -64,6 +67,7 @@ function build() {
 
   return frag(
     ...rates.map(ratesCard),
+    aiKeyCard(),
     ...rest.map(sectionCard),
     emojiStub(),
   );
@@ -141,6 +145,89 @@ async function saveRates() {
     haptic.err();
   } finally {
     st.ratesSaving = false;
+    render();
+  }
+}
+
+/* ---------- Ключ OpenRouter ---------- */
+
+function aiKeyCard() {
+  const k = st.aiKey;
+  const status = !k
+    ? h('div', { class: 'hint mb8', text: 'Не удалось узнать, задан ли ключ.' })
+    : k.set
+      ? h('div', { class: 'ok-box mb8', text: k.source === 'env'
+        ? `Работает ключ с сервера: ${k.masked}`
+        : `Ключ задан: ${k.masked}` })
+      : h('div', { class: 'warn-box mb8', text: 'Ключ не задан — комплектация пойдёт без ИИ, сырым списком.' });
+
+  return h('section', { class: 'card card-pad' },
+    h('h2', { class: 'card-title', text: 'Ключ OpenRouter' }),
+    status,
+    h('label', { class: 'field' },
+      h('span', { class: 'field-label', text: k && k.set ? 'Новый ключ' : 'Ключ' }),
+      // password: вставленный ключ не виден через плечо и не попадает в скриншоты
+      h('input', {
+        class: 'input', type: 'password', placeholder: 'sk-or-v1-…',
+        autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false',
+        value: st.aiKeyInput, 'data-focus-key': 'ai-key',
+        oninput: (e) => { st.aiKeyInput = e.target.value; },
+      })),
+    st.aiKeyError ? h('div', { class: 'mb8' }, errBox(st.aiKeyError)) : null,
+    h('div', { class: 'row' },
+      h('button', {
+        class: 'btn grow', type: 'button',
+        text: st.aiKeySaving ? 'Проверяем…' : 'Сохранить ключ',
+        disabled: st.aiKeySaving,
+        onclick: saveAiKey,
+      }),
+      k && k.source === 'settings'
+        ? h('button', {
+          class: 'btn-ghost', type: 'button', text: 'Удалить',
+          disabled: st.aiKeySaving,
+          onclick: deleteAiKey,
+        })
+        : null,
+    ),
+  );
+}
+
+async function saveAiKey() {
+  const key = st.aiKeyInput.trim();
+  if (!key) { toast('Вставьте ключ', 'error'); return; }
+  st.aiKeySaving = true; st.aiKeyError = '';
+  render();
+  try {
+    st.aiKey = await api.aiKeySave(key);
+    st.aiKeyInput = '';           // не держим ключ в памяти страницы дольше нужного
+    toast('Ключ проверен и сохранён', 'ok');
+    haptic.ok();
+  } catch (e) {
+    st.aiKeyError = e.message;
+    haptic.err();
+  } finally {
+    st.aiKeySaving = false;
+    render();
+  }
+}
+
+async function deleteAiKey() {
+  const msg = 'Удалить ключ из настроек? Если на сервере есть запасной, заработает он.';
+  const ok = await new Promise((resolve) => {
+    const wa = window.Telegram && window.Telegram.WebApp;
+    if (wa && wa.showConfirm) wa.showConfirm(msg, resolve);
+    else resolve(window.confirm(msg));
+  });
+  if (!ok) return;
+  st.aiKeySaving = true; st.aiKeyError = '';
+  render();
+  try {
+    st.aiKey = await api.aiKeyDelete();
+    toast('Ключ удалён', 'ok');
+  } catch (e) {
+    st.aiKeyError = e.message;
+  } finally {
+    st.aiKeySaving = false;
     render();
   }
 }

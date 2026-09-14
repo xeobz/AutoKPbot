@@ -51,6 +51,9 @@ from scraper import find_listing_url, scrape
 from sheets import append_car_row, append_kult40_row, append_msk_row, update_car_row
 from storage import (
     EDITABLE_SETTINGS,
+    delete_openrouter_key,
+    openrouter_key_info,
+    set_openrouter_key,
     SECTION_TITLES,
     cleanup_drafts,
     close_draft,
@@ -195,6 +198,10 @@ class SubmitReq(PreviewReq):
 
 class PhotosReq(BaseModel):
     photos: list[str] = []
+
+
+class KeyReq(BaseModel):
+    key: str
 
 
 class SettingReq(BaseModel):
@@ -631,6 +638,56 @@ async def settings_set(req: SettingReq, user: dict = Depends(admin_user)):
         set_setting("rates_set_by", user["name"])
 
     return {"key": req.key, "value": str(value)}
+
+
+# ── Ключ OpenRouter ──────────────────────────────────────────────────────────
+
+async def _check_openrouter_key(key: str) -> str | None:
+    """
+    Спрашиваем у OpenRouter, живой ли ключ. Опечатка при вставке иначе
+    всплыла бы только на следующем КП — голым чек-листом вместо комплектации.
+    Возвращает текст ошибки или None.
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://openrouter.ai/api/v1/key",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+    except Exception:
+        return "OpenRouter не ответил — проверьте ключ ещё раз через минуту"
+    if resp.status_code in (401, 403):
+        return "OpenRouter не принял ключ — проверьте, что скопировали его целиком"
+    if resp.status_code != 200:
+        return f"OpenRouter ответил ошибкой {resp.status_code}"
+    return None
+
+
+@api.get("/openrouter-key")
+async def openrouter_key_get(user: dict = Depends(admin_user)):
+    return openrouter_key_info()
+
+
+@api.post("/openrouter-key")
+async def openrouter_key_set(req: KeyReq, user: dict = Depends(admin_user)):
+    key = (req.key or "").strip()
+    if not key.startswith("sk-or-") or len(key) < 30 or any(c.isspace() for c in key):
+        raise HTTPException(400, "Это не похоже на ключ OpenRouter — он начинается с sk-or-")
+    error = await _check_openrouter_key(key)
+    if error:
+        raise HTTPException(400, error)
+    set_openrouter_key(key)
+    log.info("Ключ OpenRouter заменён из мини-аппа (%s)", user["name"])
+    return openrouter_key_info()
+
+
+@api.delete("/openrouter-key")
+async def openrouter_key_delete(user: dict = Depends(admin_user)):
+    delete_openrouter_key()
+    log.info("Ключ OpenRouter удалён из настроек (%s)", user["name"])
+    return openrouter_key_info()
 
 
 @api.post("/rates")

@@ -20,7 +20,7 @@ import time
 
 import httpx
 
-from storage import get_exclude_words
+from storage import get_exclude_words, get_openrouter_key
 
 log = logging.getLogger("autokp.ai")
 
@@ -577,12 +577,14 @@ async def build_options(d: dict) -> list[str]:
     if not features and not description:
         return []
     d["kp_options_source"] = "checklist"
-    api_key = os.getenv("OPENROUTER_API_KEY", "")
+    # Ключ читаем на каждый расчёт: админ может сменить его в мини-аппе
+    api_key = get_openrouter_key()
     if not description or not api_key:
         # Старые черновики и записи истории сохранялись до того, как парсер
         # научился брать описание. Пустая комплектация в КП хуже чек-листа,
         # поэтому отдаём его — а причина остаётся в журнале
-        log.warning("Комплектация из чек-листа: описания продавца нет")
+        log.warning("Комплектация из чек-листа: %s",
+                    "нет ключа OpenRouter" if not api_key else "описания продавца нет")
         return features
 
     user_prompt = "Описание продавца:\n" + description

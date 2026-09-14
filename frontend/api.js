@@ -109,6 +109,9 @@ export const api = {
   settings: () => get('/api/settings'),
   settingsSave: (key, value) => post('/api/settings', { key, value }),
   ratesSave: (rate_eur_usdt, rate_usdt_rub) => post('/api/rates', { rate_eur_usdt, rate_usdt_rub }),
+  aiKey: () => get('/api/openrouter-key'),
+  aiKeySave: (key) => post('/api/openrouter-key', { key }),
+  aiKeyDelete: () => request('/api/openrouter-key', { method: 'DELETE' }),
 
   draft: (id) => get(`/api/draft/${encodeURIComponent(id)}`),
   draftPhotos: (id, photos) => post(`/api/draft/${encodeURIComponent(id)}/photos`, { photos }),

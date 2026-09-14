@@ -2,6 +2,7 @@
 SQLite storage for bot settings and pending (incomplete) car requests.
 """
 import json
+import os
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -515,3 +516,45 @@ def update_history_data(record_id: int, data: dict) -> None:
             "UPDATE history SET data_json=? WHERE id=?",
             (json.dumps(data, ensure_ascii=False), record_id),
         )
+
+
+# ── Ключ OpenRouter ──────────────────────────────────────────────────────────
+# Хранится в базе, чтобы админ менял его из мини-аппа без деплоя. Ключ из .env
+# остаётся запасным: пока в базе пусто, работает он. Наружу ключ целиком
+# не отдаётся никогда — только маска.
+
+_OPENROUTER_KEY = "openrouter_api_key"
+
+
+def get_openrouter_key() -> str:
+    """Действующий ключ: из настроек, иначе из окружения."""
+    return get_optional(_OPENROUTER_KEY) or os.getenv("OPENROUTER_API_KEY", "")
+
+
+def set_openrouter_key(key: str) -> None:
+    set_setting(_OPENROUTER_KEY, key.strip())
+
+
+def delete_openrouter_key() -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM settings WHERE key=?", (_OPENROUTER_KEY,))
+
+
+def mask_key(key: str) -> str:
+    """«sk-or-v1-29f0…dfb1» — видно, какой ключ стоит, но не сам ключ."""
+    key = key or ""
+    if len(key) <= 16:
+        return "•" * len(key)
+    return f"{key[:10]}…{key[-4:]}"
+
+
+def openrouter_key_info() -> dict:
+    """Что показываем в настройках: задан ли ключ, откуда и его маску."""
+    own = get_optional(_OPENROUTER_KEY)
+    env = os.getenv("OPENROUTER_API_KEY", "")
+    key = own or env
+    return {
+        "set": bool(key),
+        "source": "settings" if own else ("env" if env else ""),
+        "masked": mask_key(key) if key else "",
+    }
