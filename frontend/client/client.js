@@ -1,6 +1,6 @@
-// Конструктор презентации: в макете выбирается рамка, снизу — снимок для неё,
-// пальцем двигается кадр, ползунком — масштаб. Превью — та же разметка,
-// что уйдёт в Chrome на печать, поэтому что видно здесь, то и будет в файле.
+// Конструктор презентации. Нажатие на фото в макете открывает снизу панель
+// со снимками: выбрал — рамка обновилась сразу, без прокрутки. Превью — та же
+// разметка, что уходит в Chrome на печать: что видно здесь, то и будет в файле.
 (function () {
   'use strict';
 
@@ -11,10 +11,7 @@
   const $ = (id) => document.getElementById(id);
   const SIZE = { pdf: [1600, 900], story: [1080, 1920] };
 
-  const st = {
-    data: null, fmt: null, layout: {}, selected: null,
-    doc: null, scale: 1, saving: false,
-  };
+  const st = { data: null, fmt: null, layout: {}, selected: null, doc: null, scale: 1, saving: false };
 
   // ── API ─────────────────────────────────────────────────────────────────
   async function api(path, opts) {
@@ -30,6 +27,12 @@
   function showError(text) {
     $('error').textContent = text;
     $('error').hidden = !text;
+  }
+
+  function haptic(kind) {
+    if (!tg || !tg.HapticFeedback) return;
+    if (kind === 'select') tg.HapticFeedback.selectionChanged();
+    else tg.HapticFeedback.notificationOccurred(kind);
   }
 
   // ── Загрузка задания ────────────────────────────────────────────────────
@@ -48,15 +51,14 @@
     st.layout = JSON.parse(JSON.stringify(d.layout || {}));
 
     if (d.formats.length > 1) {
-      const tabs = $('tabs');
-      tabs.hidden = false;
+      $('tabs').hidden = false;
       d.formats.forEach((f) => {
         const b = document.createElement('button');
         b.type = 'button';
+        b.dataset.fmt = f;
         b.textContent = f === 'pdf' ? '📄 PDF' : '📱 Сторис';
         b.onclick = () => switchFormat(f);
-        b.dataset.fmt = f;
-        tabs.appendChild(b);
+        $('tabs').appendChild(b);
       });
     }
     buildStrip();
@@ -67,7 +69,7 @@
 
   function switchFormat(fmt) {
     st.fmt = fmt;
-    select(null);
+    closeSheet();
     document.querySelectorAll('#tabs button').forEach((b) =>
       b.setAttribute('aria-pressed', b.dataset.fmt === fmt ? 'true' : 'false'));
     loadPreview();
@@ -76,17 +78,16 @@
   // ── Превью ──────────────────────────────────────────────────────────────
   function loadPreview() {
     const frame = $('frame');
-    const [w] = SIZE[st.fmt];
     $('loading').hidden = false;
     $('loading').textContent = 'Собираем превью…';
-    frame.style.width = w + 'px';
+    frame.style.width = SIZE[st.fmt][0] + 'px';
     frame.onload = () => waitReady(frame, 0);
     frame.src = '/api/client/jobs/' + encodeURIComponent(jobId) + '/preview/' + st.fmt + '?t=' + Date.now();
   }
 
   function waitReady(frame, tries) {
     const doc = frame.contentDocument;
-    // комплектация раскладывается скриптом после загрузки шрифтов — ждём её
+    // комплектация раскладывается скриптом после загрузки шрифта — ждём её
     if (!doc || !doc.body || (doc.body.dataset.ready !== '1' && tries < 60)) {
       setTimeout(() => waitReady(frame, tries + 1), 100);
       return;
@@ -102,10 +103,9 @@
     if (!st.doc) return;
     const [w, h0] = SIZE[st.fmt];
     const h = st.fmt === 'pdf' ? Math.max(h0, st.doc.body.scrollHeight) : h0;
-    const frame = $('frame');
     st.scale = $('frameWrap').clientWidth / w;
-    frame.style.height = h + 'px';
-    frame.style.transform = 'scale(' + st.scale + ')';
+    $('frame').style.height = h + 'px';
+    $('frame').style.transform = 'scale(' + st.scale + ')';
     $('frameWrap').style.height = Math.ceil(h * st.scale) + 'px';
   }
 
@@ -113,8 +113,7 @@
     return '/api/client/jobs/' + encodeURIComponent(jobId) + '/photo/' + idx;
   }
 
-  // Раскладка из памяти переносится в превью: вкладку перезагрузили,
-  // а правки контрагента терять нельзя
+  // правки из памяти переносятся в заново загруженное превью (смена вкладки)
   function applyLayout() {
     st.doc.querySelectorAll('[data-slot]').forEach((el) => {
       const s = st.layout[el.dataset.slot];
@@ -125,116 +124,151 @@
   function paint(el, s) {
     const img = el.querySelector('img');
     const src = photoUrl(s.photo);
-    if (!img.src.endsWith(src)) img.src = src;
+    if (!img.getAttribute('src').endsWith(src)) img.src = src;
     img.style.objectPosition = s.x.toFixed(1) + '% ' + s.y.toFixed(1) + '%';
     img.style.transform = 'scale(' + s.zoom.toFixed(3) + ')';
     img.style.transformOrigin = s.x.toFixed(1) + '% ' + s.y.toFixed(1) + '%';
   }
 
-  // ── Выбор рамки и перетаскивание кадра ──────────────────────────────────
+  function slotEl(name) {
+    return st.doc && st.doc.querySelector('[data-slot="' + name + '"]');
+  }
+
+  // ── Нажатие и перетаскивание в макете ───────────────────────────────────
   function bindSlots() {
     st.doc.querySelectorAll('[data-slot]').forEach((el) => {
       let drag = null;
       el.addEventListener('pointerdown', (e) => {
         e.preventDefault();
-        select(el.dataset.slot);
-        const img = el.querySelector('img');
         const s = st.layout[el.dataset.slot];
-        drag = { x: e.clientX, y: e.clientY, sx: s.x, sy: s.y, img: img, el: el };
+        drag = { x: e.clientX, y: e.clientY, sx: s.x, sy: s.y, moved: false };
         el.setPointerCapture(e.pointerId);
-        el.style.cursor = 'grabbing';
       });
       el.addEventListener('pointermove', (e) => {
         if (!drag) return;
+        // двигать кадр можно только в уже выбранной рамке: иначе при прокрутке
+        // страницы пальцем фото случайно съезжали бы
+        if (st.selected !== el.dataset.slot) return;
+        const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+        if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+        drag.moved = true;
         const s = st.layout[el.dataset.slot];
         const box = el.getBoundingClientRect();
-        const img = drag.img;
+        const img = el.querySelector('img');
         const nw = img.naturalWidth || box.width, nh = img.naturalHeight || box.height;
-        // насколько кадр больше рамки — столько и можно сдвинуть
         const fit = Math.max(box.width / nw, box.height / nh) * s.zoom;
         const spareX = nw * fit - box.width, spareY = nh * fit - box.height;
-        if (spareX > 1) s.x = clamp(drag.sx - (e.clientX - drag.x) / spareX * 100, 0, 100);
-        if (spareY > 1) s.y = clamp(drag.sy - (e.clientY - drag.y) / spareY * 100, 0, 100);
+        if (spareX > 1) s.x = clamp(drag.sx - dx / spareX * 100, 0, 100);
+        if (spareY > 1) s.y = clamp(drag.sy - dy / spareY * 100, 0, 100);
         paint(el, s);
       });
-      const end = () => { drag = null; el.style.cursor = ''; };
+      const end = () => {
+        if (drag && !drag.moved) openSheet(el.dataset.slot);
+        drag = null;
+      };
       el.addEventListener('pointerup', end);
-      el.addEventListener('pointercancel', end);
+      el.addEventListener('pointercancel', () => { drag = null; });
     });
   }
 
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
-  function select(name) {
+  // ── Панель замены фото ──────────────────────────────────────────────────
+  function openSheet(name) {
     st.selected = name;
-    if (st.doc) {
-      st.doc.querySelectorAll('[data-slot]').forEach((el) =>
-        el.classList.toggle('sel', el.dataset.slot === name));
-    }
-    const slots = (st.data && st.data.slots[st.fmt]) || [];
-    const meta = slots.find((x) => x.name === name);
-    $('slotName').textContent = meta ? meta.title : 'Выберите фото в макете';
-    const s = name && st.layout[name];
-    $('zoom').disabled = !s;
-    $('resetBtn').disabled = !s;
-    $('zoom').value = s ? s.zoom : 1;
-    $('strip').classList.toggle('active', !!s);
-    markStrip();
+    st.doc.querySelectorAll('[data-slot]').forEach((el) =>
+      el.classList.toggle('sel', el.dataset.slot === name));
+    const meta = (st.data.slots[st.fmt] || []).find((x) => x.name === name);
+    $('slotName').textContent = meta ? meta.title : 'Фото';
+    $('zoom').value = st.layout[name].zoom;
+    markStrip(true);
+    $('sheet').classList.add('open');
+    $('sheet').setAttribute('aria-hidden', 'false');
+    document.body.classList.add('sheet-open');
+    $('hint').textContent = '✅ Выберите снимок внизу. Двигайте фото пальцем, чтобы выровнять кадр.';
+    haptic('select');
+    // выбранная рамка должна быть видна над панелью, а не под ней
+    requestAnimationFrame(() => revealSlot(name));
   }
 
-  // ── Лента снимков ───────────────────────────────────────────────────────
+  function closeSheet() {
+    st.selected = null;
+    if (st.doc) st.doc.querySelectorAll('.slot.sel').forEach((el) => el.classList.remove('sel'));
+    $('sheet').classList.remove('open');
+    $('sheet').setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('sheet-open');
+    $('hint').textContent = '👆 Нажмите на любое фото в макете — снизу появятся снимки для замены.';
+  }
+
+  function revealSlot(name) {
+    const el = slotEl(name);
+    if (!el) return;
+    const r = el.getBoundingClientRect();              // координаты внутри макета
+    const frameTop = $('frameWrap').getBoundingClientRect().top + window.scrollY;
+    const top = frameTop + r.top * st.scale;
+    const height = r.height * st.scale;
+    const visible = window.innerHeight - $('sheet').offsetHeight;
+    // рамку ставим по центру видимой части над панелью
+    const target = top - Math.max(12, (visible - height) / 2);
+    window.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+  }
+
   function buildStrip() {
-    const strip = $('strip');
     st.data.photos.forEach((p) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.dataset.idx = p.idx;
-      b.innerHTML = '<img loading="lazy" alt="">';
-      b.querySelector('img').src = p.thumb;
+      b.setAttribute('aria-label', 'Снимок ' + (p.idx + 1));
+      const img = document.createElement('img');
+      img.loading = 'lazy';
+      img.alt = '';
+      img.src = p.thumb;
+      b.appendChild(img);
       b.onclick = () => choosePhoto(p.idx);
-      strip.appendChild(b);
+      $('strip').appendChild(b);
     });
   }
 
-  function markStrip() {
-    const current = st.selected && st.layout[st.selected];
+  function markStrip(scrollToCurrent) {
+    const s = st.selected && st.layout[st.selected];
+    let current = null;
     document.querySelectorAll('#strip button').forEach((b) => {
-      const idx = +b.dataset.idx;
-      b.setAttribute('aria-pressed', current && current.photo === idx ? 'true' : 'false');
+      const on = !!s && s.photo === +b.dataset.idx;
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      if (on) current = b;
     });
+    if (scrollToCurrent && current) {
+      current.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+    }
   }
 
   function choosePhoto(idx) {
-    if (!st.selected || !st.layout[st.selected]) {
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('warning');
-      $('hint').textContent = 'Сначала нажмите на фото в макете — потом выберите снимок для него.';
-      return;
-    }
+    const s = st.selected && st.layout[st.selected];
+    if (!s) return;
     // новый снимок — сдвиг и масштаб от старого ему не подходят
-    Object.assign(st.layout[st.selected], { photo: idx, zoom: 1, x: 50, y: 50 });
-    const el = st.doc.querySelector('[data-slot="' + st.selected + '"]');
-    if (el) paint(el, st.layout[st.selected]);
+    Object.assign(s, { photo: idx, zoom: 1, x: 50, y: 50 });
+    paint(slotEl(st.selected), s);
     $('zoom').value = 1;
-    markStrip();
-    if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+    markStrip(false);
+    haptic('select');
   }
 
   $('zoom').addEventListener('input', (e) => {
     const s = st.selected && st.layout[st.selected];
     if (!s) return;
     s.zoom = +e.target.value;
-    const el = st.doc.querySelector('[data-slot="' + st.selected + '"]');
-    if (el) paint(el, s);
+    paint(slotEl(st.selected), s);
   });
 
   $('resetBtn').addEventListener('click', () => {
     const s = st.selected && st.layout[st.selected];
     if (!s) return;
     Object.assign(s, { zoom: 1, x: 50, y: 50 });
-    const el = st.doc.querySelector('[data-slot="' + st.selected + '"]');
-    if (el) paint(el, s);
+    paint(slotEl(st.selected), s);
     $('zoom').value = 1;
   });
+
+  $('doneBtn').addEventListener('click', closeSheet);
 
   // ── Сохранение ──────────────────────────────────────────────────────────
   $('saveBtn').addEventListener('click', async () => {
@@ -249,7 +283,7 @@
         method: 'POST', body: JSON.stringify({ layout: st.layout }),
       });
       btn.textContent = '✅ Готово — файлы придут в чат';
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+      haptic('success');
       setTimeout(() => { if (tg) tg.close(); }, 1400);
     } catch (e) {
       showError(e.message);

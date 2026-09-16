@@ -127,11 +127,18 @@ async def font():
                         headers={"Cache-Control": "public, max-age=2592000"})
 
 
-# В превью фото выбираются нажатием: подсветка выбранной рамки и курсор
-PREVIEW_CSS = """<style>
-.slot{cursor:grab;touch-action:none}
-.slot.sel{outline:6px solid #6fc0ff;outline-offset:-6px;z-index:5}
-.slot.sel::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 9999px rgba(47,139,255,.08);pointer-events:none}
+# Подсказки только для превью — в файл не попадают. Макет в мини-аппе сильно
+# уменьшен (PDF примерно в 4 раза), поэтому размеры значка заданы крупно.
+def preview_css(fmt: str) -> str:
+    size = 44 if fmt == "pdf" else 34
+    return f"""<style>
+.slot{{cursor:pointer;touch-action:pan-y}}
+.slot.sel{{touch-action:none;cursor:grab;outline:{size // 5}px solid #6fc0ff;outline-offset:-{size // 5}px;z-index:5}}
+.slot::after{{content:"✎ Заменить";position:absolute;left:{size // 2}px;top:{size // 2}px;z-index:6;
+ font:700 {size}px/1 Manrope,Arial,sans-serif;color:#fff;background:rgba(4,18,46,.72);
+ border:{max(2, size // 16)}px solid rgba(111,192,255,.8);border-radius:999px;padding:{size // 3}px {size // 2}px;
+ pointer-events:none;backdrop-filter:blur(6px)}}
+.slot.sel::after{{content:"Двигайте пальцем";background:#2f8bff;border-color:#2f8bff}}
 </style>"""
 
 
@@ -151,7 +158,7 @@ async def job_preview(job_id: str, fmt: str):
         return f"/api/client/jobs/{job_id}/photo/{i}"
 
     page = deck.pdf_html(job["layout"], src) if fmt == "pdf" else deck.story_html(job["layout"], src)
-    return HTMLResponse(page.replace("</head>", PREVIEW_CSS + "</head>", 1),
+    return HTMLResponse(page.replace("</head>", preview_css(fmt) + "</head>", 1),
                         headers={"Cache-Control": "no-store"})
 
 
