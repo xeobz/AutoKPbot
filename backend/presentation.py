@@ -280,8 +280,14 @@ def icon(name: str) -> str:
             f'stroke-linecap="round" stroke-linejoin="round">{ICONS.get(name, ICONS["plus"])}</svg>')
 
 
-FONTS = ('<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800'
-         '&display=block" rel="stylesheet">')
+# Шрифт лежит в проекте: серверный Chrome не дожидался Google Fonts
+# и печатал запасным Liberation Sans. Лицензия OFL — fonts/OFL.txt
+FONT_FILE = Path(__file__).parent / "fonts" / "Manrope.ttf"
+
+
+def font_css(url: str) -> str:
+    return ('<style>@font-face{font-family:Manrope;src:url("' + url + '") format("truetype");'
+            'font-weight:200 800;font-display:block}</style>')
 
 BASE_CSS = """
 *{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -447,8 +453,9 @@ class Deck:
     """Всё, что нужно разметке: данные снимка, наценка, логотип, раскладка фото."""
 
     def __init__(self, snapshot: dict, markup_rub: int = 0, logo_src: str = "",
-                 country: str = "", delivery: str = ""):
+                 country: str = "", delivery: str = "", font_url: str = ""):
         d = snapshot["data"]
+        self.font = font_css(font_url or FONT_FILE.resolve().as_uri())
         self.d = d
         self.make, self.model, self.engine_tag = split_title(d.get("title") or "")
         self.price = int(snapshot["price_rub"]) + max(0, int(markup_rub or 0))
@@ -554,7 +561,7 @@ class Deck:
         return "".join(pages)
 
     def pdf_html(self, layout: dict, src) -> str:
-        return (f'<!doctype html><html lang="ru"><head><meta charset="utf-8">{FONTS}'
+        return (f'<!doctype html><html lang="ru"><head><meta charset="utf-8">{self.font}'
                 f'<style>{BASE_CSS}{PDF_CSS}</style></head><body>{self.pdf_pages(layout, src)}</body></html>')
 
     # ── Сторис ──
@@ -585,7 +592,7 @@ class Deck:
                 f'<div class="c-price"><div>{self.price_block()}</div><div class="accent"></div></div></div>')
 
     def story_html(self, layout: dict, src) -> str:
-        return (f'<!doctype html><html lang="ru"><head><meta charset="utf-8">{FONTS}'
+        return (f'<!doctype html><html lang="ru"><head><meta charset="utf-8">{self.font}'
                 f'<style>{BASE_CSS}{STORY_CSS}</style></head><body>{self.story_body(layout, src)}'
                 f"<script>document.body.dataset.ready='1'</script></body></html>")
 

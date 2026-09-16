@@ -121,6 +121,12 @@ async def job_logo(job_id: str):
     return FileResponse(path, headers={"Cache-Control": "no-cache"})
 
 
+@router.get("/font")
+async def font():
+    return FileResponse(presentation.FONT_FILE, media_type="font/ttf",
+                        headers={"Cache-Control": "public, max-age=2592000"})
+
+
 # В превью фото выбираются нажатием: подсветка выбранной рамки и курсор
 PREVIEW_CSS = """<style>
 .slot{cursor:grab;touch-action:none}
@@ -138,7 +144,8 @@ async def job_preview(job_id: str, fmt: str):
     logo = (f"/api/client/jobs/{job_id}/logo"
             if profile.get("logo_path") and job.get("with_logo", 1) else "")
     deck = presentation.Deck(snapshot, job["markup_rub"], logo,
-                             get_setting("kp_country") or "", _delivery(snapshot))
+                             get_setting("kp_country") or "", _delivery(snapshot),
+                             font_url="/api/client/font")
 
     def src(i: int) -> str:
         return f"/api/client/jobs/{job_id}/photo/{i}"
