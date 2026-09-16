@@ -2,6 +2,7 @@
 Сборка и отправка КП в Telegram — общее для бота и веб-API.
 """
 import logging
+import os
 import re
 
 from telegram import InputMediaPhoto
@@ -9,7 +10,8 @@ from telegram import InputMediaPhoto
 from ai import build_options
 from calc import total_rub, util_is_reduced
 from kp import brand_candidates, build_kp_parts
-from storage import get_brand_emoji, get_float, get_optional, get_setting
+from storage import (get_brand_emoji, get_float, get_optional, get_setting,
+                     new_snapshot_token, save_snapshot)
 
 CONTACT = "@Aleksandr_Montaro"
 
@@ -73,8 +75,13 @@ def pick_photos(all_photos: list[str]) -> list[str]:
     return [all_photos[i] for i in idxs]
 
 
+def snapshot_url(token: str) -> str:
+    base = (os.getenv("WEB_APP_URL") or "https://montaro.site").rstrip("/")
+    return f"{base}/k/{token}"
+
+
 async def build_captions(
-    d: dict, car_num: int | str, contact: str = CONTACT
+    d: dict, car_num: int | str, contact: str = CONTACT, lot_url: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """
     Текст КП частями: одна — если всё влезло в подпись к фото, иначе две.
@@ -120,6 +127,7 @@ async def build_captions(
         lot_emoji_fallback=lot_fallback,
         order_emoji_id=order_emoji_id,
         order_emoji_fallback=order_fallback,
+        lot_url=lot_url,
     )
     plain = build_kp_parts(
         d, total, options, car_num, contact,
@@ -130,6 +138,7 @@ async def build_captions(
         delivery=delivery,
         lot_emoji_fallback=lot_fallback,
         order_emoji_fallback=order_fallback,
+        lot_url=lot_url,
     )
     return with_emoji, plain
 
@@ -151,12 +160,29 @@ async def send_kp(
     и контактами уходит следующим сообщением.
     Возвращает данные для последующей замены фото или None, если фото не было.
     """
-    parts, parts_plain = await build_captions(d, car_num, contact)
+    # Комплектацию считаем один раз: она нужна и подписи, и снимку
+    options = await build_options(d)
+    if options:
+        d["kp_options"] = options
+    token = new_snapshot_token()
+    parts, parts_plain = await build_captions(d, car_num, contact, lot_url=snapshot_url(token))
     caption, caption_plain = parts[0], parts_plain[0]
     rest, rest_plain = parts[1:], parts_plain[1:]
 
     all_photos = d.get("photos", []) or []
     chosen     = [_telegram_photo(u) for u in (photos or pick_photos(all_photos))]
+
+    # Снимок пишем до отправки: если Telegram упадёт на альбоме, КП всё равно
+    # уйдёт текстом со ссылкой, и ссылка должна вести на существующий снимок
+    try:
+        total = total_rub(d)
+        save_snapshot(
+            token, car_num, d.get("direction", ""), round((total or 0) / 1000) * 1000,
+            data=d, options=list(options or []),
+            photos={"chosen": chosen, "all": [_telegram_photo(u) for u in all_photos]},
+        )
+    except Exception as exc:
+        log.error("Снимок КП #%s не сохранён: %s", car_num, exc)
 
     async def _send_rest(texts: list[str]) -> None:
         """Продолжение КП отдельными сообщениями — с тем же запасным вариантом."""

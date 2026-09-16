@@ -3,6 +3,7 @@ SQLite storage for bot settings and pending (incomplete) car requests.
 """
 import json
 import os
+import secrets
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -177,6 +178,21 @@ def init_db() -> None:
                 added_by        TEXT NOT NULL DEFAULT ''
             )
         """)
+        # Снимок каждого отправленного КП. Клиентский бот находит его по токену
+        # из подписи и строит презентацию из полных данных, а не из текста КП
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS kp_snapshots (
+                token       TEXT PRIMARY KEY,
+                car_num     TEXT NOT NULL,
+                direction   TEXT NOT NULL DEFAULT '',
+                price_rub   INTEGER NOT NULL,
+                data_json   TEXT NOT NULL,
+                options_json TEXT NOT NULL,
+                photos_json TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            )
+        """)
+        con.execute("CREATE INDEX IF NOT EXISTS kp_snapshots_lot ON kp_snapshots(car_num)")
         # Seed defaults (ignore if already set)
         for k, v in _DEFAULTS.items():
             con.execute(
@@ -558,3 +574,53 @@ def openrouter_key_info() -> dict:
         "source": "settings" if own else ("env" if env else ""),
         "masked": mask_key(key) if key else "",
     }
+
+
+# ── Снимки КП ────────────────────────────────────────────────────────────────
+
+def new_snapshot_token() -> str:
+    return secrets.token_urlsafe(12)
+
+
+def save_snapshot(token: str, car_num, direction: str, price_rub: int, data: dict,
+                  options: list[str], photos: dict) -> None:
+    with _conn() as con:
+        con.execute(
+            """INSERT OR REPLACE INTO kp_snapshots
+               (token, car_num, direction, price_rub, data_json, options_json, photos_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (token, str(car_num), direction or "", int(price_rub),
+             json.dumps(data, ensure_ascii=False, default=str),
+             json.dumps(options, ensure_ascii=False),
+             json.dumps(photos, ensure_ascii=False),
+             datetime.now().strftime("%d.%m.%Y %H:%M")),
+        )
+
+
+def _snapshot_row(row) -> dict:
+    return {
+        "token": row["token"], "car_num": row["car_num"], "direction": row["direction"],
+        "price_rub": row["price_rub"], "created_at": row["created_at"],
+        "data": json.loads(row["data_json"]),
+        "options": json.loads(row["options_json"]),
+        "photos": json.loads(row["photos_json"]),
+    }
+
+
+def get_snapshot(token: str) -> dict | None:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM kp_snapshots WHERE token=?", (token,)).fetchone()
+    return _snapshot_row(row) if row else None
+
+
+def find_snapshot(car_num: str, price_rub: int) -> dict | None:
+    """
+    Запасной поиск, когда ссылки с токеном в подписи нет. Номер лота
+    не уникален между листами, поэтому только в паре с ценой.
+    """
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM kp_snapshots WHERE car_num=? AND price_rub=? "
+            "ORDER BY rowid DESC LIMIT 1", (str(car_num), int(price_rub)),
+        ).fetchone()
+    return _snapshot_row(row) if row else None

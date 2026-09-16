@@ -765,6 +765,17 @@ def create_app() -> FastAPI:
     )
     app.include_router(api, prefix="/api")
 
+    @app.get("/k/{token}", include_in_schema=False)
+    async def kp_link(token: str):
+        # Ссылка номера лота в КП. Данных наружу не отдаём: она нужна
+        # клиентскому боту как метка подлинности, а не человеку
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(
+            "<!doctype html><meta charset=utf-8><title>Коммерческое предложение</title>"
+            "<body style='font:16px system-ui;background:#04122e;color:#eaf2ff;"
+            "display:grid;place-items:center;height:100vh;margin:0'>"
+            "Коммерческое предложение по автомобилю</body>")
+
     @app.get("/health")
     async def health():
         return {"status": "ok"}

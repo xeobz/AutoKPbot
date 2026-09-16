@@ -351,8 +351,29 @@ def parse_autoscout24_html(html: str) -> dict:
         "engine_l":   _parse_engine_litres(vehicle, title),
         "fuel":       _parse_fuel(vehicle),
         "gearbox":    normalise_gearbox(_formatted(vehicle.get("transmissionType"))),
+        "attrs":      _attrs(vehicle),
     }
 
+
+
+def _attrs(vehicle: dict) -> dict:
+    """
+    Доп. поля объявления в ключах mobile.de — у презентации один набор полей
+    на обе площадки. Чего у объявления нет, того в словаре не будет.
+    """
+    pairs = {
+        "firstRegistration":      _as_text(vehicle.get("firstRegistrationDate")),
+        "manufacturerColorName":  _as_text(vehicle.get("bodyColorOriginal")),
+        "interior":               _formatted(vehicle.get("upholstery")),
+        "numSeats":               _as_text(vehicle.get("numberOfSeats")),
+        "doorCount":              _as_text(vehicle.get("numberOfDoors")),
+        "numberOfPreviousOwners": _as_text(vehicle.get("numberOfPreviousOwners")),
+        "cylinder":               _as_text(vehicle.get("cylinders")),
+        "cubicCapacity":          _as_text(vehicle.get("displacementInCCM")),
+        "category":               _formatted(vehicle.get("bodyType")),
+        "emissionClass":          _formatted(vehicle.get("emissionClass")),
+    }
+    return {k: v.strip() for k, v in pairs.items() if v and str(v).strip()}
 
 # ── Загрузка страницы ────────────────────────────────────────────────────────
 

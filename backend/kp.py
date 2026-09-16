@@ -305,6 +305,7 @@ def build_kp_parts(
     lot_emoji_fallback: str = "🏷",
     order_emoji_id: str | None = None,
     order_emoji_fallback: str = "✈️",
+    lot_url: str | None = None,
 ) -> list[str]:
     """
     Собирает КП — всегда одним сообщением, подписью к фото.
@@ -323,7 +324,12 @@ def build_kp_parts(
         footer = FULL_UTIL_FOOTER
 
     # Номер лота — служебный, поэтому обычным текстом, а название жирным
-    car_line = (f"{_emoji_tag(lot_emoji_id, lot_emoji_fallback)} #{lot_number} | "
+    # Номер лота — ссылка на снимок КП: по ней клиентский бот узнаёт наше КП.
+    # Telegram сохраняет ссылки при пересылке, а вот текст можно подделать
+    lot = f"#{lot_number}"
+    if lot_url:
+        lot = f'<a href="{html.escape(lot_url, quote=True)}">{lot}</a>'
+    car_line = (f"{_emoji_tag(lot_emoji_id, lot_emoji_fallback)} {lot} | "
                 f"<b>{title}</b> {_emoji_tag(brand_emoji_id, brand_emoji_fallback)}")
     price_line = f"<b>{_emoji_tag(price_emoji_id, '💸')}{fmt_price_rub(total_rub)}</b>"
 

@@ -375,6 +375,9 @@ def _parse_html(html: str) -> dict:
         "gearbox": normalise_gearbox(attrs.get("transmission", "")),
         # «Транспортное средство ЕС» → «ЕС»: в КП строка «Версия: ЕС»
         "country_version": _short_version(attrs.get("countryVersion", "")),
+        # Все поля карточки как есть: в КП идёт малая часть, остальное нужно
+        # клиентской презентации — салон, владельцы, ДТП, первая регистрация
+        "attrs": attrs,
     }
 
 
