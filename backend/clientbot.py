@@ -346,6 +346,9 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_build, pattern=r"^build:"))
     app.add_handler(MessageHandler(~filters.COMMAND, on_message))
     log.info("Клиентский бот запущен")
+    # Python 3.14: get_event_loop() больше не создаёт цикл сам — как в bot.py
+    import asyncio
+    asyncio.set_event_loop(asyncio.new_event_loop())
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
