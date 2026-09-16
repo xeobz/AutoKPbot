@@ -181,7 +181,9 @@
     const meta = (st.data.slots[st.fmt] || []).find((x) => x.name === name);
     $('slotName').textContent = meta ? meta.title : 'Фото';
     $('zoom').value = st.layout[name].zoom;
+    paintZoom();
     markStrip(true);
+    setTimeout(updateArrows, 300);
     $('sheet').classList.add('open');
     $('sheet').setAttribute('aria-hidden', 'false');
     document.body.classList.add('sheet-open');
@@ -249,6 +251,7 @@
     Object.assign(s, { photo: idx, zoom: 1, x: 50, y: 50 });
     paint(slotEl(st.selected), s);
     $('zoom').value = 1;
+    paintZoom();
     markStrip(false);
     haptic('select');
   }
@@ -257,6 +260,7 @@
     const s = st.selected && st.layout[st.selected];
     if (!s) return;
     s.zoom = +e.target.value;
+    paintZoom();
     paint(slotEl(st.selected), s);
   });
 
@@ -266,9 +270,32 @@
     Object.assign(s, { zoom: 1, x: 50, y: 50 });
     paint(slotEl(st.selected), s);
     $('zoom').value = 1;
+    paintZoom();
   });
 
   $('doneBtn').addEventListener('click', closeSheet);
+
+  // ── Стрелки ленты: видны, только когда в ту сторону есть что листать ─────
+  function updateArrows() {
+    const s = $('strip');
+    const max = s.scrollWidth - s.clientWidth;
+    $('stripWrap').classList.toggle('can-prev', s.scrollLeft > 4);
+    $('stripWrap').classList.toggle('can-next', s.scrollLeft < max - 4);
+  }
+  function page(dir) {
+    const s = $('strip');
+    s.scrollBy({ left: dir * s.clientWidth * 0.8, behavior: 'smooth' });
+  }
+  $('prevBtn').addEventListener('click', () => page(-1));
+  $('nextBtn').addEventListener('click', () => page(1));
+  $('strip').addEventListener('scroll', updateArrows, { passive: true });
+  window.addEventListener('resize', updateArrows);
+
+  // заливка ползунка до текущего значения
+  function paintZoom() {
+    const z = $('zoom');
+    z.style.setProperty('--fill', ((z.value - z.min) / (z.max - z.min) * 100) + '%');
+  }
 
   // ── Сохранение ──────────────────────────────────────────────────────────
   $('saveBtn').addEventListener('click', async () => {
