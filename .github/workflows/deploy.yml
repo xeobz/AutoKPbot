@@ -33,6 +33,7 @@ jobs:
             GOOGLE_SHEET_TAB=${{ secrets.GOOGLE_SHEET_TAB }}
             GOOGLE_CREDENTIALS=credentials.json
             WEB_APP_URL=${{ secrets.WEB_APP_URL }}
+            CLIENT_BOT_TOKEN=${{ secrets.CLIENT_BOT_TOKEN }}
             EOF
 
             # ── Записываем credentials.json из base64-secret ───────────────
@@ -44,6 +45,18 @@ jobs:
             # ── Перезапускаем бота и мини-апп ──────────────────────────────
             systemctl restart autokpbot
             systemctl restart autokpweb || echo "⚠️ autokpweb не установлен — см. DEPLOY.md"
+
+            # ── Клиентский бот: запускаем, только когда задан его токен ────
+            if grep -q '^CLIENT_BOT_TOKEN=.\+' .env; then
+              cp deploy/autokpclient.service /etc/systemd/system/autokpclient.service
+              systemctl daemon-reload
+              systemctl enable --quiet autokpclient
+              systemctl restart autokpclient
+              sleep 3
+              systemctl is-active autokpclient || journalctl -u autokpclient -n 30 --no-pager
+            else
+              echo "ℹ️ CLIENT_BOT_TOKEN не задан — клиентский бот пропущен"
+            fi
 
             # ── Проверяем, что всё поднялось ───────────────────────────────
             sleep 5

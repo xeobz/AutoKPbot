@@ -193,6 +193,30 @@ def init_db() -> None:
             )
         """)
         con.execute("CREATE INDEX IF NOT EXISTS kp_snapshots_lot ON kp_snapshots(car_num)")
+        # Контрагенты клиентского бота: логотип и последняя наценка
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS client_profiles (
+                user_id    INTEGER PRIMARY KEY,
+                logo_path  TEXT NOT NULL DEFAULT '',
+                markup_rub INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        # Задание на презентацию: что собрать, с какой наценкой и где какое фото
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS client_jobs (
+                id          TEXT PRIMARY KEY,
+                user_id     INTEGER NOT NULL,
+                chat_id     INTEGER NOT NULL,
+                token       TEXT NOT NULL,
+                formats     TEXT NOT NULL,
+                markup_rub  INTEGER NOT NULL DEFAULT 0,
+                with_logo   INTEGER NOT NULL DEFAULT 1,
+                layout_json TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'new',
+                created_at  TEXT NOT NULL
+            )
+        """)
         # Seed defaults (ignore if already set)
         for k, v in _DEFAULTS.items():
             con.execute(
@@ -624,3 +648,66 @@ def find_snapshot(car_num: str, price_rub: int) -> dict | None:
             "ORDER BY rowid DESC LIMIT 1", (str(car_num), int(price_rub)),
         ).fetchone()
     return _snapshot_row(row) if row else None
+
+
+# ── Клиентский бот: профили и задания ────────────────────────────────────────
+
+def get_client_profile(user_id: int) -> dict | None:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM client_profiles WHERE user_id=?", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _upsert_profile(user_id: int, **fields) -> None:
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    with _conn() as con:
+        con.execute(
+            "INSERT OR IGNORE INTO client_profiles (user_id, updated_at) VALUES (?, ?)",
+            (user_id, now))
+        for key, value in fields.items():
+            con.execute(f"UPDATE client_profiles SET {key}=?, updated_at=? WHERE user_id=?",
+                        (value, now, user_id))
+
+
+def save_client_logo(user_id: int, path: str) -> None:
+    _upsert_profile(user_id, logo_path=path)
+
+
+def save_client_markup(user_id: int, markup_rub: int) -> None:
+    _upsert_profile(user_id, markup_rub=int(markup_rub))
+
+
+def create_job(user_id: int, chat_id: int, token: str, formats: list[str],
+               markup_rub: int, layout: dict, with_logo: bool = True) -> str:
+    job_id = secrets.token_urlsafe(16)
+    with _conn() as con:
+        con.execute(
+            """INSERT INTO client_jobs
+               (id, user_id, chat_id, token, formats, markup_rub, with_logo, layout_json, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', ?)""",
+            (job_id, user_id, chat_id, token, ",".join(formats), int(markup_rub), int(with_logo),
+             json.dumps(layout, ensure_ascii=False), datetime.now().strftime("%d.%m.%Y %H:%M")),
+        )
+    return job_id
+
+
+def get_job(job_id: str) -> dict | None:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM client_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        return None
+    job = dict(row)
+    job["formats"] = [f for f in job["formats"].split(",") if f]
+    job["layout"] = json.loads(job.pop("layout_json") or "{}")
+    return job
+
+
+def update_job_layout(job_id: str, layout: dict) -> None:
+    with _conn() as con:
+        con.execute("UPDATE client_jobs SET layout_json=? WHERE id=?",
+                    (json.dumps(layout, ensure_ascii=False), job_id))
+
+
+def set_job_status(job_id: str, status: str) -> None:
+    with _conn() as con:
+        con.execute("UPDATE client_jobs SET status=? WHERE id=?", (status, job_id))

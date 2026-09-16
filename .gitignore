@@ -34,3 +34,4 @@ backend/test_regex.py
 .vscode/
 .idea/
 .claude/
+backend/client_media/

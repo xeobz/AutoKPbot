@@ -1,0 +1,15 @@
+[Unit]
+Description=AutoKP Client Bot (презентации для контрагентов)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/autokpbot/backend
+ExecStart=/opt/autokpbot/venv/bin/python clientbot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

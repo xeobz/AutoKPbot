@@ -764,6 +764,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api, prefix="/api")
+    from webapi_client import router as client_router
+    app.include_router(client_router, prefix="/api/client")
 
     @app.get("/k/{token}", include_in_schema=False)
     async def kp_link(token: str):

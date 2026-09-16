@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Конструктор презентации</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="client.css?v=1">
+</head>
+<body>
+<div id="app">
+  <header class="head">
+    <div class="head-title" id="title">Загружаем КП…</div>
+    <div class="head-price" id="price"></div>
+  </header>
+
+  <nav class="tabs" id="tabs" hidden></nav>
+
+  <p class="hint" id="hint">Нажмите на фото в макете, затем выберите снимок ниже.
+    Двигайте пальцем, чтобы выровнять кадр.</p>
+
+  <section class="stage" id="stage">
+    <div class="frame-wrap" id="frameWrap"><iframe id="frame" title="Превью" scrolling="no"></iframe></div>
+    <div class="loading" id="loading">Собираем превью…</div>
+  </section>
+
+  <section class="panel" id="panel">
+    <div class="panel-head">
+      <span class="slot-name" id="slotName">Выберите фото в макете</span>
+      <button class="ghost" id="resetBtn" type="button" disabled>Сбросить</button>
+    </div>
+    <label class="zoom">
+      <span>Масштаб</span>
+      <input type="range" id="zoom" min="1" max="3" step="0.02" value="1" disabled>
+    </label>
+    <div class="strip" id="strip"></div>
+  </section>
+
+  <div class="error" id="error" hidden></div>
+  <button class="save" id="saveBtn" type="button" disabled>Сохранить и получить файлы</button>
+</div>
+<script src="client.js?v=1"></script>
+</body>
+</html>
