@@ -41,6 +41,25 @@ def _fmt_rub(v: int) -> str:
     return f"{int(v):,}".replace(",", " ") + " ₽"
 
 
+def parse_markup(text: str) -> int | None:
+    """
+    Наценка в рублях. Люди пишут по-разному: «500 000», «500к», «500 тыс»,
+    «0,5 млн». Голые цифры из «500к» дали бы 500 ₽ — отсюда разбор суффиксов.
+    """
+    t = (text or "").lower().replace("\u00a0", " ").replace("₽", "").replace("руб", "").strip()
+    m = re.fullmatch(r"([\d\s]+(?:[.,]\d+)?)\s*(к|k|тыс\.?|тысяч[аи]?|млн\.?|миллион[аов]*)?\.?", t)
+    if not m:
+        return None
+    number = float(re.sub(r"\s", "", m.group(1)).replace(",", "."))
+    unit = m.group(2) or ""
+    if unit.startswith(("к", "k", "тыс")):
+        number *= 1_000
+    elif unit.startswith(("млн", "миллион")):
+        number *= 1_000_000
+    value = int(round(number))
+    return value if 0 < value <= 100_000_000 else None
+
+
 # ── Распознавание КП ────────────────────────────────────────────────────────
 
 def find_kp(msg: Message) -> dict | None:
@@ -75,7 +94,8 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ctx.user_data.clear()
     await update.message.reply_text(
         "Здравствуйте! Я превращаю КП Montaro в презентацию от имени вашей компании.\n\n"
-        "Перешлите сюда КП по автомобилю — целиком, вместе с фото и подписью.",
+        "Перешлите сюда КП по автомобилю — целиком, вместе с фото и подписью.\n\n"
+        "Сменить логотип — /logo",
     )
 
 
@@ -83,7 +103,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     step = ctx.user_data.get("step")
 
-    if step == "logo" and (msg.photo or msg.document):
+    if step in ("logo", "logo_only") and (msg.photo or msg.document):
         return await receive_logo(update, ctx)
     if step == "markup" and msg.text:
         return await receive_markup_amount(update, ctx)
@@ -124,6 +144,18 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             [InlineKeyboardButton(FORMAT_NAMES["both"], callback_data="fmt:both")],
         ]),
     )
+
+
+async def logo_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/logo — посмотреть или заменить логотип, не пересылая КП."""
+    profile = get_client_profile(update.effective_user.id) or {}
+    ctx.user_data["step"] = "logo_only"
+    text = "Пришлите новый логотип — картинкой или файлом PNG/JPG."
+    if profile.get("logo_path") and Path(profile["logo_path"]).exists():
+        with open(profile["logo_path"], "rb") as fh:
+            await update.message.reply_photo(photo=fh, caption="Сейчас стоит этот логотип.\n\n" + text)
+        return
+    await update.message.reply_text("Логотипа пока нет.\n\n" + text)
 
 
 async def on_format(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -205,6 +237,10 @@ async def receive_logo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         note = ("\n\n💡 Фото без прозрачного фона ляжет на синий фон прямоугольником. "
                 "PNG-файлом будет аккуратнее.")
     await msg.reply_text(f"✅ Логотип сохранён — в следующий раз загружать не нужно.{note}")
+    # замена через /logo — сборки нет, дальше спрашивать нечего
+    if ctx.user_data.get("step") == "logo_only" or not ctx.user_data.get("token"):
+        ctx.user_data.pop("step", None)
+        return
     await ask_markup(msg, ctx, update.effective_user.id)
 
 
@@ -240,11 +276,10 @@ async def on_markup_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
 
 async def receive_markup_amount(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    digits = re.sub(r"[^\d]", "", msg.text or "")
-    if not digits or int(digits) > 100_000_000:
-        await msg.reply_text("Введите сумму числом, например: 300 000")
+    markup = parse_markup(msg.text or "")
+    if markup is None:
+        await msg.reply_text("Не понял сумму. Введите наценку в рублях, например: 500 000 или 500к")
         return
-    markup = int(digits)
     save_client_markup(update.effective_user.id, markup)
     await finish(msg, ctx, update.effective_user.id, markup)
 
@@ -260,7 +295,11 @@ async def finish(message: Message, ctx: ContextTypes.DEFAULT_TYPE, user_id: int,
     job_id = create_job(user_id, message.chat_id, snapshot["token"],
                         ctx.user_data.get("formats") or ["pdf"], markup, layout,
                         with_logo=not ctx.user_data.get("no_logo"))
-    price = presentation.rub(int(snapshot["price_rub"]) + markup)
+    base = int(snapshot["price_rub"])
+    price = presentation.rub(base + markup)
+    # Контрагенту показываем расчёт — клиенту в файле уйдёт только итоговая цена
+    breakdown = (f"Цена в КП: {_fmt_rub(base)}\n"
+                 f"Наценка: {_fmt_rub(markup)}\n") if markup else f"Цена в КП: {_fmt_rub(base)}\n"
     ctx.user_data.clear()
 
     rows = []
@@ -270,7 +309,7 @@ async def finish(message: Message, ctx: ContextTypes.DEFAULT_TYPE, user_id: int,
             web_app=WebAppInfo(url=f"{WEB_APP_URL}/client/?job={job_id}"))])
     rows.append([InlineKeyboardButton("⚡ Собрать автоматически", callback_data=f"build:{job_id}")])
     await message.reply_text(
-        f"Цена в презентации: <b>{price}</b>\n\n"
+        f"{breakdown}Цена в презентации: <b>{price}</b>\n\n"
         "Откройте конструктор, чтобы выбрать, какие фото и куда поставить, — "
         "или соберу автоматически.",
         parse_mode="HTML",
@@ -291,6 +330,7 @@ def main() -> None:
     init_db()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("logo", logo_command))
     app.add_handler(CallbackQueryHandler(on_format, pattern=r"^fmt:"))
     app.add_handler(CallbackQueryHandler(on_logo_button, pattern=r"^logo:"))
     app.add_handler(CallbackQueryHandler(on_markup_button, pattern=r"^mk:"))
