@@ -127,18 +127,13 @@ async def font():
                         headers={"Cache-Control": "public, max-age=2592000"})
 
 
-# Подсказки только для превью — в файл не попадают. Макет в мини-аппе сильно
-# уменьшен (PDF примерно в 4 раза), поэтому размеры значка заданы крупно.
+# Только для превью, в файл не попадает: выбранная рамка подсвечена.
+# Надписей на фото нет — на маленьких рамках они закрывали снимок целиком
 def preview_css(fmt: str) -> str:
-    size = 44 if fmt == "pdf" else 34
+    line = 9 if fmt == "pdf" else 7          # макет PDF в мини-аппе уменьшен сильнее
     return f"""<style>
 .slot{{cursor:pointer;touch-action:pan-y}}
-.slot.sel{{touch-action:none;cursor:grab;outline:{size // 5}px solid #6fc0ff;outline-offset:-{size // 5}px;z-index:5}}
-.slot::after{{content:"✎ Заменить";position:absolute;left:{size // 2}px;top:{size // 2}px;z-index:6;
- font:700 {size}px/1 Manrope,Arial,sans-serif;color:#fff;background:rgba(4,18,46,.72);
- border:{max(2, size // 16)}px solid rgba(111,192,255,.8);border-radius:999px;padding:{size // 3}px {size // 2}px;
- pointer-events:none;backdrop-filter:blur(6px)}}
-.slot.sel::after{{content:"Двигайте пальцем";background:#2f8bff;border-color:#2f8bff}}
+.slot.sel{{touch-action:none;cursor:grab;outline:{line}px solid #6fc0ff;outline-offset:-{line}px;z-index:5}}
 </style>"""
 
 
