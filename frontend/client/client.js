@@ -56,7 +56,7 @@
         const b = document.createElement('button');
         b.type = 'button';
         b.dataset.fmt = f;
-        b.textContent = f === 'pdf' ? '📄 PDF' : '📱 Сторис';
+        b.textContent = f === 'pdf' ? 'PDF' : 'Сторис';
         b.onclick = () => switchFormat(f);
         $('tabs').appendChild(b);
       });
@@ -185,7 +185,7 @@
     $('sheet').classList.add('open');
     $('sheet').setAttribute('aria-hidden', 'false');
     document.body.classList.add('sheet-open');
-    $('hint').textContent = '✅ Выберите снимок внизу. Двигайте фото пальцем, чтобы выровнять кадр.';
+    $('hint').textContent = 'Выберите снимок внизу. Двигайте фото пальцем, чтобы выровнять кадр.';
     haptic('select');
     // выбранная рамка должна быть видна над панелью, а не под ней
     requestAnimationFrame(() => revealSlot(name));
@@ -197,7 +197,7 @@
     $('sheet').classList.remove('open');
     $('sheet').setAttribute('aria-hidden', 'true');
     document.body.classList.remove('sheet-open');
-    $('hint').textContent = '👆 Нажмите на любое фото в макете — снизу появятся снимки для замены.';
+    $('hint').textContent = 'Нажмите на любое фото в макете — снизу появятся снимки для замены.';
   }
 
   function revealSlot(name) {
