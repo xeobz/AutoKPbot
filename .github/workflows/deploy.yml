@@ -46,23 +46,31 @@ jobs:
             systemctl restart autokpbot
             systemctl restart autokpweb || echo "⚠️ autokpweb не установлен — см. DEPLOY.md"
 
-            # ── Клиентский бот: запускаем, только когда задан его токен ────
+            # ── Клиентский бот (презентации для контрагентов) ──────────────
+            # Юнит копируем при каждом деплое: правки в deploy/ доезжают сами
+            CLIENT_ENABLED=0
             if grep -q '^CLIENT_BOT_TOKEN=.\+' .env; then
+              CLIENT_ENABLED=1
               cp deploy/autokpclient.service /etc/systemd/system/autokpclient.service
               systemctl daemon-reload
               systemctl enable --quiet autokpclient
               systemctl restart autokpclient
-              sleep 3
-              systemctl is-active autokpclient || journalctl -u autokpclient -n 30 --no-pager
+              CLIENT_RESTARTS=$(systemctl show -p NRestarts --value autokpclient)
             else
               echo "ℹ️ CLIENT_BOT_TOKEN не задан — клиентский бот пропущен"
             fi
 
+            # Презентации собирает Chrome — без него бот работает, но файлы не соберутся
+            command -v google-chrome >/dev/null || echo "⚠️ google-chrome не найден — презентации не соберутся"
+
             # ── Проверяем, что всё поднялось ───────────────────────────────
-            sleep 5
+            # 8 секунд: упавший при старте сервис systemd успевает перезапустить,
+            # и мгновенная проверка показала бы «active» у неработающего бота
+            sleep 8
             echo "Статус сервисов:"
             systemctl is-active autokpbot
             systemctl is-active autokpweb || true
+            [ "$CLIENT_ENABLED" = 1 ] && systemctl is-active autokpclient || true
 
             if systemctl is-enabled autokpweb >/dev/null 2>&1; then
               echo "Проверка мини-аппа:"
@@ -72,6 +80,20 @@ jobs:
                 exit 1
               }
               echo
+              curl -fsS -m 15 -o /dev/null http://127.0.0.1:8000/api/client/font || {
+                echo "❌ API конструктора презентаций не отвечает"
+                journalctl -u autokpweb -n 30 --no-pager
+                exit 1
+              }
+            fi
+
+            if [ "$CLIENT_ENABLED" = 1 ]; then
+              if ! systemctl is-active --quiet autokpclient \
+                 || [ "$(systemctl show -p NRestarts --value autokpclient)" != "$CLIENT_RESTARTS" ]; then
+                echo "❌ клиентский бот не запустился"
+                journalctl -u autokpclient -n 40 --no-pager
+                exit 1
+              fi
             fi
 
             # Бот не должен падать сразу после старта

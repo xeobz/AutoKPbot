@@ -324,11 +324,20 @@ async def on_build(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await deliver_job(ctx.bot, query.data.split(":", 1)[1])
 
 
+async def _post_init(app: Application) -> None:
+    # Меню команд задаём при запуске: после перевыпуска токена оно не потеряется
+    from telegram import BotCommand
+    await app.bot.set_my_commands([
+        BotCommand("start", "Как пользоваться"),
+        BotCommand("logo", "Посмотреть или заменить логотип"),
+    ])
+
+
 def main() -> None:
     if not TOKEN:
         raise SystemExit("CLIENT_BOT_TOKEN не задан — клиентский бот не запущен")
     init_db()
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).post_init(_post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("logo", logo_command))
     app.add_handler(CallbackQueryHandler(on_format, pattern=r"^fmt:"))
