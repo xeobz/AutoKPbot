@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Конструктор презентации</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="client.css?v=4">
+<link rel="stylesheet" href="client.css?v=6">
 </head>
 <body>
 <div id="app">
@@ -15,6 +15,15 @@
   </header>
 
   <nav class="tabs" id="tabs" hidden></nav>
+
+  <!-- Выбор дизайна: живые обложки, листаются пальцем -->
+  <section class="designs" id="designs" hidden>
+    <div class="designs-head">
+      <span class="designs-label">Дизайн</span>
+      <span class="designs-name" id="designName"></span>
+    </div>
+    <div class="designs-track" id="designTrack"></div>
+  </section>
 
   <p class="hint" id="hint">Нажмите на любое фото в макете — снизу появятся снимки для замены.</p>
 
@@ -48,6 +57,6 @@
 </div>
 
 <button class="save" id="saveBtn" type="button" disabled>Сохранить и получить файлы</button>
-<script src="client.js?v=4"></script>
+<script src="client.js?v=6"></script>
 </body>
 </html>

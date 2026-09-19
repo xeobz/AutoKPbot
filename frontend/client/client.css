@@ -19,6 +19,27 @@ button{font-family:inherit;cursor:pointer}
   color:var(--mute);font-weight:600;font-size:15px}
 .tabs button[aria-pressed="true"]{background:var(--acc);border-color:var(--acc);color:#fff}
 
+/* ── Карусель дизайнов ─────────────────────────────────────────────── */
+.designs{margin-top:14px}
+.designs-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.designs-label{color:var(--mute);font-size:13px;text-transform:uppercase;letter-spacing:.08em;font-weight:600}
+.designs-name{font-weight:700;color:var(--acc2)}
+.designs-track{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;padding:2px 2px 6px;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;margin:0 -16px;padding-left:16px;padding-right:16px;
+  scroll-padding:0 16px}
+.designs-track::-webkit-scrollbar{display:none}
+.dcard{flex:none;width:58%;max-width:300px;scroll-snap-align:start;border:2px solid transparent;border-radius:14px;
+  background:#020a1c;padding:0;overflow:hidden;text-align:left;color:var(--ink);transition:border-color .2s,transform .15s}
+.dcard.story{width:34%;max-width:170px}
+.dcard:active{transform:scale(.98)}
+.dcard[aria-pressed="true"]{border-color:var(--acc2);box-shadow:0 0 0 3px rgba(111,192,255,.25)}
+.dcard .thumb{position:relative;overflow:hidden;background:#0a1c44}
+.dcard .thumb iframe{position:absolute;left:0;top:0;border:0;transform-origin:0 0;pointer-events:none}
+.dcard .thumb .ph{position:absolute;inset:0;display:grid;place-items:center;color:var(--mute);font-size:12px}
+.dcard .cap{padding:8px 10px 9px}
+.dcard .cap b{display:block;font-size:14px}
+.dcard .cap span{display:block;font-size:12px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 .hint{color:var(--acc2);font-size:14px;margin:12px 0;padding:10px 12px;border-radius:12px;
   background:rgba(47,139,255,.12);border:1px solid var(--line)}
 

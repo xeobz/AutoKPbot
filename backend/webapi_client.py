@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 import presentation
 from storage import (get_client_profile, get_job, get_setting, get_snapshot,
-                     set_job_status, update_job_layout)
+                     save_client_design, set_job_status, update_job_layout)
 
 log = logging.getLogger("autokp.client_api")
 router = APIRouter()
@@ -82,6 +82,8 @@ async def job_info(job_id: str, user_id: int = Depends(client_user)):
         "title": " ".join(x for x in (deck.make, deck.model.replace("‑", "-")) if x),
         "price": presentation.rub(deck.price),
         "layout": job["layout"],
+        "designs": [{"id": k, **v} for k, v in presentation.DESIGNS.items()],
+        "design": presentation.design_id(job["layout"]),
         "slots": {fmt: [{"name": n, "title": presentation.SLOT_TITLES[n]} for n, _ in slots]
                   for fmt, slots in presentation.SLOTS.items() if fmt in job["formats"]},
         "photos": [{"idx": i, "thumb": f"/api/client/jobs/{job_id}/photo/{i}?thumb=1"}
@@ -122,8 +124,11 @@ async def job_logo(job_id: str):
 
 
 @router.get("/font")
-async def font():
-    return FileResponse(presentation.FONT_FILE, media_type="font/ttf",
+async def font(name: str = "manrope"):
+    path = presentation.FONTS.get(name)
+    if not path:
+        raise HTTPException(404, "Нет такого шрифта")
+    return FileResponse(path, media_type="font/ttf",
                         headers={"Cache-Control": "public, max-age=2592000"})
 
 
@@ -138,21 +143,29 @@ def preview_css(fmt: str) -> str:
 
 
 @router.get("/jobs/{job_id}/preview/{fmt}")
-async def job_preview(job_id: str, fmt: str):
+async def job_preview(job_id: str, fmt: str, design: str = "", cover: int = 0):
+    if design and design not in presentation.DESIGNS:
+        raise HTTPException(400, "Неизвестный дизайн")
     job, snapshot = _job_or_404(job_id)
     if fmt not in ("pdf", "story") or fmt not in job["formats"]:
         raise HTTPException(404, "Такого формата в задании нет")
     profile = get_client_profile(job["user_id"]) or {}
     logo = (f"/api/client/jobs/{job_id}/logo"
             if profile.get("logo_path") and job.get("with_logo", 1) else "")
+    logo_path = profile.get("logo_path") or ""
     deck = presentation.Deck(snapshot, job["markup_rub"], logo,
                              get_setting("kp_country") or "", _delivery(snapshot),
-                             font_url="/api/client/font")
+                             font_url="/api/client/font",
+                             logo_light=bool(logo) and presentation.logo_is_light(logo_path))
 
     def src(i: int) -> str:
         return f"/api/client/jobs/{job_id}/photo/{i}"
 
-    page = deck.pdf_html(job["layout"], src) if fmt == "pdf" else deck.story_html(job["layout"], src)
+    layout = dict(job["layout"])
+    if design:
+        layout["_design"] = {"id": design}
+    page = (deck.pdf_html(layout, src, only_cover=bool(cover)) if fmt == "pdf"
+            else deck.story_html(layout, src))
     return HTMLResponse(page.replace("</head>", preview_css(fmt) + "</head>", 1),
                         headers={"Cache-Control": "no-store"})
 
@@ -164,7 +177,7 @@ class SubmitReq(BaseModel):
 def _clean_layout(raw: dict, photo_count: int) -> dict:
     """Раскладку из браузера не доверяем: только известные слоты и допустимые числа."""
     known = {n for slots in presentation.SLOTS.values() for n, _ in slots}
-    out = {}
+    out = {"_design": {"id": presentation.design_id(raw)}}
     for name, s in (raw or {}).items():
         if name not in known or not isinstance(s, dict):
             continue
@@ -194,6 +207,8 @@ async def job_submit(job_id: str, req: SubmitReq, tasks: BackgroundTasks,
         raise HTTPException(503, "Клиентский бот не настроен")
     layout = _clean_layout(req.layout, len(presentation.snapshot_photos(snapshot)))
     update_job_layout(job_id, layout)
+    # выбранный дизайн запоминаем: в следующий раз конструктор откроется в нём
+    save_client_design(user_id, layout["_design"]["id"])
     set_job_status(job_id, "queued")
 
     from clientsend import deliver_job

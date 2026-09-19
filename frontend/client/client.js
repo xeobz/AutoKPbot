@@ -1,5 +1,5 @@
-// Конструктор презентации. Нажатие на фото в макете открывает снизу панель
-// со снимками: выбрал — рамка обновилась сразу, без прокрутки. Превью — та же
+// Конструктор презентации. Сверху — карусель дизайнов с живыми обложками,
+// ниже — макет: нажатие на фото открывает панель со снимками. Превью — та же
 // разметка, что уходит в Chrome на печать: что видно здесь, то и будет в файле.
 (function () {
   'use strict';
@@ -9,9 +9,9 @@
 
   const jobId = new URLSearchParams(location.search).get('job') || '';
   const $ = (id) => document.getElementById(id);
-  const SIZE = { pdf: [1600, 900], story: [1080, 1920] };
+  const STORY = [1080, 1920];
 
-  const st = { data: null, fmt: null, layout: {}, selected: null, doc: null, scale: 1, saving: false };
+  const st = { data: null, fmt: null, design: 'classic', layout: {}, selected: null, doc: null, scale: 1, saving: false };
 
   // ── API ─────────────────────────────────────────────────────────────────
   async function api(path, opts) {
@@ -35,6 +35,20 @@
     else tg.HapticFeedback.notificationOccurred(kind);
   }
 
+  function designMeta(id) {
+    return (st.data.designs || []).find((x) => x.id === id) || { id: 'classic', title: 'Оригинал', pdf_size: [1600, 900] };
+  }
+
+  // Размер страницы зависит от дизайна: «Оригинал» 16:9, референсы 4:3
+  function pageSize(fmt, design) {
+    return fmt === 'story' ? STORY : designMeta(design || st.design).pdf_size;
+  }
+
+  function previewUrl(fmt, design, cover) {
+    return '/api/client/jobs/' + encodeURIComponent(jobId) + '/preview/' + fmt +
+      '?design=' + encodeURIComponent(design) + (cover ? '&cover=1' : '') + '&t=' + Date.now();
+  }
+
   // ── Загрузка задания ────────────────────────────────────────────────────
   async function boot() {
     if (!jobId) { showError('Откройте конструктор кнопкой в боте'); return; }
@@ -49,6 +63,8 @@
     $('title').textContent = d.title;
     $('price').textContent = d.price;
     st.layout = JSON.parse(JSON.stringify(d.layout || {}));
+    st.design = d.design || 'classic';
+    st.layout._design = { id: st.design };
 
     if (d.formats.length > 1) {
       $('tabs').hidden = false;
@@ -64,7 +80,7 @@
     buildStrip();
     $('saveBtn').disabled = false;
     switchFormat(d.formats[0]);
-    window.addEventListener('resize', fitFrame);
+    window.addEventListener('resize', () => { fitFrame(); fitThumbs(); });
   }
 
   function switchFormat(fmt) {
@@ -72,6 +88,62 @@
     closeSheet();
     document.querySelectorAll('#tabs button').forEach((b) =>
       b.setAttribute('aria-pressed', b.dataset.fmt === fmt ? 'true' : 'false'));
+    buildDesigns();
+    loadPreview();
+  }
+
+  // ── Карусель дизайнов ───────────────────────────────────────────────────
+  function buildDesigns() {
+    const designs = st.data.designs || [];
+    $('designs').hidden = designs.length < 2;
+    const track = $('designTrack');
+    track.innerHTML = '';
+    designs.forEach((d) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'dcard' + (st.fmt === 'story' ? ' story' : '');
+      card.dataset.id = d.id;
+      card.setAttribute('aria-pressed', d.id === st.design ? 'true' : 'false');
+      card.innerHTML = '<div class="thumb"><div class="ph">…</div><iframe tabindex="-1" scrolling="no"></iframe></div>' +
+        '<div class="cap"><b></b><span></span></div>';
+      card.querySelector('b').textContent = d.title;
+      card.querySelector('.cap span').textContent = d.description || '';
+      const frame = card.querySelector('iframe');
+      frame.onload = () => { const ph = card.querySelector('.ph'); if (ph) ph.remove(); };
+      frame.src = previewUrl(st.fmt, d.id, true);
+      card.onclick = () => chooseDesign(d.id);
+      track.appendChild(card);
+    });
+    requestAnimationFrame(() => {
+      fitThumbs();
+      const cur = track.querySelector('[aria-pressed="true"]');
+      if (cur) cur.scrollIntoView({ inline: 'center', block: 'nearest' });
+    });
+    $('designName').textContent = designMeta(st.design).title;
+  }
+
+  function fitThumbs() {
+    document.querySelectorAll('#designTrack .dcard').forEach((card) => {
+      const [w, h] = pageSize(st.fmt, card.dataset.id);
+      const thumb = card.querySelector('.thumb');
+      const frame = card.querySelector('iframe');
+      const scale = thumb.clientWidth / w;
+      thumb.style.height = Math.round(h * scale) + 'px';
+      frame.style.width = w + 'px';
+      frame.style.height = h + 'px';
+      frame.style.transform = 'scale(' + scale + ')';
+    });
+  }
+
+  function chooseDesign(id) {
+    if (id === st.design) return;
+    st.design = id;
+    st.layout._design = { id: id };
+    document.querySelectorAll('#designTrack .dcard').forEach((c) =>
+      c.setAttribute('aria-pressed', c.dataset.id === id ? 'true' : 'false'));
+    $('designName').textContent = designMeta(id).title;
+    haptic('select');
+    closeSheet();
     loadPreview();
   }
 
@@ -80,9 +152,9 @@
     const frame = $('frame');
     $('loading').hidden = false;
     $('loading').textContent = 'Собираем превью…';
-    frame.style.width = SIZE[st.fmt][0] + 'px';
+    frame.style.width = pageSize(st.fmt)[0] + 'px';
     frame.onload = () => waitReady(frame, 0);
-    frame.src = '/api/client/jobs/' + encodeURIComponent(jobId) + '/preview/' + st.fmt + '?t=' + Date.now();
+    frame.src = previewUrl(st.fmt, st.design, false);
   }
 
   function waitReady(frame, tries) {
@@ -101,7 +173,7 @@
 
   function fitFrame() {
     if (!st.doc) return;
-    const [w, h0] = SIZE[st.fmt];
+    const [w, h0] = pageSize(st.fmt);
     const h = st.fmt === 'pdf' ? Math.max(h0, st.doc.body.scrollHeight) : h0;
     st.scale = $('frameWrap').clientWidth / w;
     $('frame').style.height = h + 'px';
@@ -113,7 +185,7 @@
     return '/api/client/jobs/' + encodeURIComponent(jobId) + '/photo/' + idx;
   }
 
-  // правки из памяти переносятся в заново загруженное превью (смена вкладки)
+  // правки из памяти переносятся в заново загруженное превью (вкладка, дизайн)
   function applyLayout() {
     st.doc.querySelectorAll('[data-slot]').forEach((el) => {
       const s = st.layout[el.dataset.slot];
@@ -156,7 +228,11 @@
         const box = el.getBoundingClientRect();
         const img = el.querySelector('img');
         const nw = img.naturalWidth || box.width, nh = img.naturalHeight || box.height;
-        const fit = Math.max(box.width / nw, box.height / nh) * s.zoom;
+        // в дизайнах по референсам фото вписано в подложку целиком (contain):
+        // двигать его есть смысл, только когда оно увеличено
+        const contain = getComputedStyle(img).objectFit === 'contain';
+        const base = contain ? Math.min(box.width / nw, box.height / nh) : Math.max(box.width / nw, box.height / nh);
+        const fit = base * s.zoom;
         const spareX = nw * fit - box.width, spareY = nh * fit - box.height;
         if (spareX > 1) s.x = clamp(drag.sx - dx / spareX * 100, 0, 100);
         if (spareY > 1) s.y = clamp(drag.sy - dy / spareY * 100, 0, 100);
@@ -210,7 +286,6 @@
     const top = frameTop + r.top * st.scale;
     const height = r.height * st.scale;
     const visible = window.innerHeight - $('sheet').offsetHeight;
-    // рамку ставим по центру видимой части над панелью
     const target = top - Math.max(12, (visible - height) / 2);
     window.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
   }
@@ -256,6 +331,11 @@
     haptic('select');
   }
 
+  function paintZoom() {
+    const z = $('zoom');
+    z.style.setProperty('--fill', ((z.value - z.min) / (z.max - z.min) * 100) + '%');
+  }
+
   $('zoom').addEventListener('input', (e) => {
     const s = st.selected && st.layout[st.selected];
     if (!s) return;
@@ -291,12 +371,6 @@
   $('strip').addEventListener('scroll', updateArrows, { passive: true });
   window.addEventListener('resize', updateArrows);
 
-  // заливка ползунка до текущего значения
-  function paintZoom() {
-    const z = $('zoom');
-    z.style.setProperty('--fill', ((z.value - z.min) / (z.max - z.min) * 100) + '%');
-  }
-
   // ── Сохранение ──────────────────────────────────────────────────────────
   $('saveBtn').addEventListener('click', async () => {
     if (st.saving) return;
@@ -309,7 +383,7 @@
       await api('/jobs/' + encodeURIComponent(jobId) + '/submit', {
         method: 'POST', body: JSON.stringify({ layout: st.layout }),
       });
-      btn.textContent = '✅ Готово — файлы придут в чат';
+      btn.textContent = 'Готово — файлы придут в чат';
       haptic('success');
       setTimeout(() => { if (tg) tg.close(); }, 1400);
     } catch (e) {

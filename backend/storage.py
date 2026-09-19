@@ -202,6 +202,12 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             )
         """)
+        # Выбранный дизайн презентации — колонка появилась позже таблицы,
+        # на рабочей базе её добавляем, не трогая данные
+        try:
+            con.execute("ALTER TABLE client_profiles ADD COLUMN design TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass                                    # уже есть
         # Задание на презентацию: что собрать, с какой наценкой и где какое фото
         con.execute("""
             CREATE TABLE IF NOT EXISTS client_jobs (
@@ -675,6 +681,10 @@ def save_client_logo(user_id: int, path: str) -> None:
 
 def save_client_markup(user_id: int, markup_rub: int) -> None:
     _upsert_profile(user_id, markup_rub=int(markup_rub))
+
+
+def save_client_design(user_id: int, design: str) -> None:
+    _upsert_profile(user_id, design=design)
 
 
 def create_job(user_id: int, chat_id: int, token: str, formats: list[str],

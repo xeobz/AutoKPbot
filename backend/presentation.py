@@ -24,6 +24,8 @@ from pathlib import Path
 
 import httpx
 from PIL import Image
+import presentation_designs as designs
+from presentation_designs import DESIGNS, design_id
 
 log = logging.getLogger("autokp.presentation")
 
@@ -283,6 +285,30 @@ def icon(name: str) -> str:
 # Шрифт лежит в проекте: серверный Chrome не дожидался Google Fonts
 # и печатал запасным Liberation Sans. Лицензия OFL — fonts/OFL.txt
 FONT_FILE = Path(__file__).parent / "fonts" / "Manrope.ttf"
+# Все шрифты презентаций. DejaVu Sans — у дизайнов по референсам (лицензия
+# fonts/DejaVu-LICENSE.txt). Имена — они же параметр /api/client/font?name=
+FONTS = {
+    "manrope": FONT_FILE,
+    "dejavu": Path(__file__).parent / "fonts" / "DejaVuSans.ttf",
+    "dejavu-bold": Path(__file__).parent / "fonts" / "DejaVuSans-Bold.ttf",
+}
+
+
+def logo_is_light(path: str) -> bool:
+    """
+    Светлый ли логотип: белый логотип на светлой странице исчезнет, и под него
+    нужна тёмная плашка. Считаем среднюю яркость непрозрачных пикселей.
+    """
+    try:
+        img = Image.open(path).convert("RGBA")
+        img.thumbnail((200, 200))
+        px = [p for p in img.getdata() if p[3] > 32]
+        if not px:
+            return False
+        lum = sum(0.2126 * r + 0.7152 * g + 0.0722 * b for r, g, b, _ in px) / len(px) / 255
+        return lum > 0.72
+    except Exception:
+        return False
 
 
 def font_css(url: str) -> str:
@@ -453,9 +479,13 @@ class Deck:
     """Всё, что нужно разметке: данные снимка, наценка, логотип, раскладка фото."""
 
     def __init__(self, snapshot: dict, markup_rub: int = 0, logo_src: str = "",
-                 country: str = "", delivery: str = "", font_url: str = ""):
+                 country: str = "", delivery: str = "", font_url: str = "",
+                 logo_light: bool = False):
         d = snapshot["data"]
-        self.font = font_css(font_url or FONT_FILE.resolve().as_uri())
+        # font_url задаёт превью мини-аппа (/api/client/font), при печати шрифты — файлы
+        self.font_url = font_url
+        self.font = font_css(self.font_src("manrope"))
+        self.logo_light = logo_light
         self.d = d
         self.make, self.model, self.engine_tag = split_title(d.get("title") or "")
         self.price = int(snapshot["price_rub"]) + max(0, int(markup_rub or 0))
@@ -560,9 +590,22 @@ class Deck:
             pages.append("<script>document.body.dataset.ready='1'</script>")
         return "".join(pages)
 
-    def pdf_html(self, layout: dict, src) -> str:
+    def font_src(self, key: str) -> str:
+        if self.font_url:
+            return f"{self.font_url}?name={key}"
+        return FONTS[key].resolve().as_uri()
+
+    def pdf_html(self, layout: dict, src, only_cover: bool = False) -> str:
+        theme = design_id(layout)
+        if designs.is_editorial(theme):
+            return designs.pdf_html(self, layout, src, theme, only_cover)
+        body = self.pdf_pages(layout, src)
+        if only_cover:
+            # карусель дизайнов в мини-аппе показывает одну обложку
+            body = body[: body.index("</section>") + len("</section>")]
+            body += "<script>document.body.dataset.ready='1'</script>"
         return (f'<!doctype html><html lang="ru"><head><meta charset="utf-8">{self.font}'
-                f'<style>{BASE_CSS}{PDF_CSS}</style></head><body>{self.pdf_pages(layout, src)}</body></html>')
+                f'<style>{BASE_CSS}{PDF_CSS}</style></head><body>{body}</body></html>')
 
     # ── Сторис ──
     def story_body(self, layout: dict, src) -> str:
@@ -592,6 +635,9 @@ class Deck:
                 f'<div class="c-price"><div>{self.price_block()}</div><div class="accent"></div></div></div>')
 
     def story_html(self, layout: dict, src) -> str:
+        theme = design_id(layout)
+        if designs.is_editorial(theme):
+            return designs.story_html(self, layout, src, theme)
         return (f'<!doctype html><html lang="ru"><head><meta charset="utf-8">{self.font}'
                 f'<style>{BASE_CSS}{STORY_CSS}</style></head><body>{self.story_body(layout, src)}'
                 f"<script>document.body.dataset.ready='1'</script></body></html>")
@@ -702,6 +748,7 @@ async def render(snapshot: dict, formats: list[str], layout: dict, markup_rub: i
     Собирает файлы. Возвращает {"pdf": путь, "story": путь} — только запрошенные.
     Файлы лежат во временной папке, вызывающий удаляет её после отправки.
     """
+    theme = design_id(layout)
     urls = snapshot_photos(snapshot)
     needed = sorted({int(s["photo"]) for s in layout.values()
                      if s.get("photo") is not None and int(s["photo"]) < len(urls)})
@@ -713,8 +760,11 @@ async def render(snapshot: dict, formats: list[str], layout: dict, markup_rub: i
     # фото не скачалось — слот пропадает целиком, пустой рамки не будет
     layout = {k: v for k, v in layout.items() if v.get("photo") is not None and int(v["photo"]) in local}
 
-    logo_src = Path(logo_path).resolve().as_uri() if logo_path and Path(logo_path).exists() else ""
-    deck = Deck(snapshot, markup_rub, logo_src, country, delivery)
+    layout["_design"] = {"id": theme}
+    has_logo = bool(logo_path) and Path(logo_path).exists()
+    logo_src = Path(logo_path).resolve().as_uri() if has_logo else ""
+    deck = Deck(snapshot, markup_rub, logo_src, country, delivery,
+                logo_light=has_logo and logo_is_light(logo_path))
 
     def src(i: int) -> str:
         return local[i].resolve().as_uri()

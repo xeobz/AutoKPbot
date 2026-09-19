@@ -291,6 +291,9 @@ async def finish(message: Message, ctx: ContextTypes.DEFAULT_TYPE, user_id: int,
         await message.reply_text("Перешлите КП заново — я его потерял.")
         return
     layout = presentation.default_layout(len(presentation.snapshot_photos(snapshot)))
+    # дизайн — тот, что контрагент выбрал в прошлый раз
+    design = (get_client_profile(user_id) or {}).get("design") or "classic"
+    layout["_design"] = {"id": design if design in presentation.DESIGNS else "classic"}
     # «Без логотипа» — только для этой презентации, сохранённый логотип не трогаем
     job_id = create_job(user_id, message.chat_id, snapshot["token"],
                         ctx.user_data.get("formats") or ["pdf"], markup, layout,
