@@ -710,6 +710,13 @@ async def cached_photo(url: str) -> Path | None:
         return None
 
 
+def kp_photo_count(snapshot: dict) -> int:
+    """Сколько фото ушло в самом КП. Они стоят первыми в snapshot_photos."""
+    ph = snapshot.get("photos") or {}
+    chosen = list(dict.fromkeys(u for u in (ph.get("chosen") or []) if u))
+    return len(chosen) or len(snapshot_photos(snapshot))
+
+
 def snapshot_photos(snapshot: dict) -> list[str]:
     """Фото КП первыми, дальше остальная галерея объявления, без повторов."""
     ph = snapshot.get("photos") or {}
