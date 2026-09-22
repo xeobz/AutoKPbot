@@ -391,11 +391,11 @@ async def finish(message: Message, ctx: ContextTypes.DEFAULT_TYPE, user_id: int,
         rows.append([InlineKeyboardButton(
             "🎨 Выбрать дизайн и фото",
             web_app=WebAppInfo(url=f"{WEB_APP_URL}/client/?job={job_id}"))])
-    rows.append([InlineKeyboardButton(f"⚡ Собрать сразу — {dname}", callback_data=f"build:{job_id}")])
+    rows.append([InlineKeyboardButton(f"⚡ Собрать автоматически — {dname}", callback_data=f"build:{job_id}")])
     await message.reply_text(
         f"{breakdown}Цена в презентации: <b>{price}</b>\n\n"
         "Как собрать презентацию?\n"
-        f"• <b>Сразу</b> — дизайн «{dname}», фото из КП.\n"
+        f"• <b>Автоматически</b> — дизайн «{dname}», фото из КП.\n"
         "• <b>Выбрать дизайн и фото</b> — откроется конструктор: листайте дизайны, "
         "берите любые фото объявления и двигайте их в макете.",
         parse_mode="HTML",
