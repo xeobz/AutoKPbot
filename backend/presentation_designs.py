@@ -158,7 +158,7 @@ body{font-family:'DejaVu Sans',Arial,sans-serif;line-height:1.164}
 .matte.dark{background:var(--matte2)}
 .matte .slot{width:100%;height:100%;background:transparent}
 .slot{overflow:hidden;position:relative}
-.slot img{width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none}
+.slot img{width:100%;height:100%;object-fit:cover;display:block;user-select:none;-webkit-user-drag:none}
 /* стр. 1 */
 .c1-left{position:absolute;left:48pt;top:137pt;width:330pt}
 .c1-make{font-size:var(--make);font-weight:700;color:var(--mute);text-transform:uppercase;letter-spacing:.06em}
@@ -388,7 +388,7 @@ body{font-family:'DejaVu Sans',Arial,sans-serif;line-height:1.164}
 .st-matte.dark{background:var(--matte2)}
 .st-matte .slot{width:100%;height:100%}
 .slot{overflow:hidden;position:relative}
-.slot img{width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none}
+.slot img{width:100%;height:100%;object-fit:cover;display:block;user-select:none;-webkit-user-drag:none}
 .st-specs{display:flex;gap:22px;margin-top:40px}
 .st-spec{flex:1;border-top:2px solid var(--line);padding-top:20px;position:relative}
 .st-spec .num{font-size:15px;font-weight:700;color:var(--acc)}
