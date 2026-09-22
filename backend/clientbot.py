@@ -372,7 +372,9 @@ async def finish(message: Message, ctx: ContextTypes.DEFAULT_TYPE, user_id: int,
     layout = presentation.default_layout(presentation.kp_photo_count(snapshot))
     # дизайн — тот, что контрагент выбрал в прошлый раз
     design = (get_client_profile(user_id) or {}).get("design") or "classic"
-    layout["_design"] = {"id": design if design in presentation.DESIGNS else "classic"}
+    design = design if design in presentation.DESIGNS else "classic"
+    layout["_design"] = {"id": design}
+    dname = presentation.DESIGNS[design]["title"]
     # «Без логотипа» — только для этой презентации, сохранённый логотип не трогаем
     job_id = create_job(user_id, message.chat_id, snapshot["token"],
                         ctx.user_data.get("formats") or ["pdf"], markup, layout,
@@ -387,15 +389,15 @@ async def finish(message: Message, ctx: ContextTypes.DEFAULT_TYPE, user_id: int,
     rows = []
     if WEB_APP_URL:
         rows.append([InlineKeyboardButton(
-            "🖼 Выбрать фото вручную",
+            "🎨 Выбрать дизайн и фото",
             web_app=WebAppInfo(url=f"{WEB_APP_URL}/client/?job={job_id}"))])
-    rows.append([InlineKeyboardButton("⚡ Автоматически — фото из КП", callback_data=f"build:{job_id}")])
+    rows.append([InlineKeyboardButton(f"⚡ Собрать сразу — {dname}", callback_data=f"build:{job_id}")])
     await message.reply_text(
         f"{breakdown}Цена в презентации: <b>{price}</b>\n\n"
-        "Как подобрать фото?\n"
-        "• <b>Автоматически</b> — возьму те фото, что были в КП.\n"
-        "• <b>Вручную</b> — откроется конструктор со всеми фото объявления: "
-        "выберете, какие и куда поставить.",
+        "Как собрать презентацию?\n"
+        f"• <b>Сразу</b> — дизайн «{dname}», фото из КП.\n"
+        "• <b>Выбрать дизайн и фото</b> — откроется конструктор: листайте дизайны, "
+        "берите любые фото объявления и двигайте их в макете.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(rows),
     )
