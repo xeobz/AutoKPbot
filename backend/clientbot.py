@@ -187,9 +187,13 @@ async def ask_logo(message: Message, ctx: ContextTypes.DEFAULT_TYPE, user_id: in
         return
     await message.reply_text(
         "Пришлите логотип вашей компании — он встанет на каждую страницу.\n\n"
-        "<i>Только PNG с прозрачным фоном, отправленный файлом (скрепка → «Файл»).</i>",
+        "<i>Только PNG с прозрачным фоном, отправленный файлом (скрепка → «Файл»).</i>\n\n"
+        "Если у логотипа есть фон — нажмите «Убрать фон»: загрузите картинку, "
+        "сайт сам вырежет фон, скачайте PNG и пришлите сюда.",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Без логотипа", callback_data="logo:none")]]),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✂️ Убрать фон с логотипа", url=REMOVE_BG_URL)],
+            [InlineKeyboardButton("Без логотипа", callback_data="logo:none")]]),
     )
 
 
@@ -259,6 +263,12 @@ def check_logo(img: Image.Image) -> tuple[Image.Image | None, str]:
     return None, "У логотипа есть фон — он ляжет на презентацию прямоугольником."
 
 
+REMOVE_BG_URL = "https://www.remove.bg/ru/upload"
+REMOVE_BG = InlineKeyboardMarkup([[InlineKeyboardButton("✂️ Убрать фон с логотипа", url=REMOVE_BG_URL)]])
+REMOVE_BG_HOWTO = ("\n\n<b>Как убрать фон:</b> нажмите кнопку ниже → загрузите логотип → "
+                   "сайт сам вырежет фон → скачайте PNG и пришлите его сюда файлом.")
+
+
 async def receive_logo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     doc = msg.document
@@ -280,7 +290,8 @@ async def receive_logo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     logo, why = check_logo(img)
     if logo is None:
-        await msg.reply_text(f"⚠️ {why}\n\n{PNG_ONLY}", parse_mode="HTML")
+        await msg.reply_text(f"⚠️ {why}\n\n{PNG_ONLY}{REMOVE_BG_HOWTO}",
+                             parse_mode="HTML", reply_markup=REMOVE_BG)
         return
 
     LOGO_DIR.mkdir(parents=True, exist_ok=True)
