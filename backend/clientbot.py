@@ -16,7 +16,7 @@ from PIL import Image
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, Message, Update,
                       WebAppInfo)
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
-                          MessageHandler, filters)
+                          MessageHandler, PicklePersistence, filters)
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -107,6 +107,13 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return await receive_logo(update, ctx)
     if step == "markup" and msg.text:
         return await receive_markup_amount(update, ctx)
+
+    # Логотип файлом без подписи принимаем и вне шага «логотип»: состояние диалога
+    # могло потеряться (перезапуск бота), а человек уже прислал нужный файл
+    if msg.document and not msg.caption and not msg.media_group_id:
+        name = (msg.document.file_name or "").lower()
+        if (msg.document.mime_type or "").startswith("image/") or name.endswith((".png", ".jpg", ".jpeg")):
+            return await receive_logo(update, ctx)
 
     if not (msg.caption or msg.text):
         # альбом приходит пачкой: подпись только у первого фото, остальные молча пропускаем
@@ -414,7 +421,11 @@ def main() -> None:
     if not TOKEN:
         raise SystemExit("CLIENT_BOT_TOKEN не задан — клиентский бот не запущен")
     init_db()
-    app = Application.builder().token(TOKEN).post_init(_post_init).build()
+    presentation.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    app = (Application.builder().token(TOKEN).post_init(_post_init)
+           # шаги диалога переживают перезапуск и автодеплой
+           .persistence(PicklePersistence(str(presentation.MEDIA_DIR / "clientbot_state.pickle")))
+           .build())
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("logo", logo_command))
     app.add_handler(CallbackQueryHandler(on_format, pattern=r"^fmt:"))
