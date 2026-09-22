@@ -113,7 +113,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if msg.media_group_id:
             return
         if step == "logo":
-            await msg.reply_text("Пришлите логотип картинкой или файлом PNG/JPG.")
+            await msg.reply_text("Пришлите логотип файлом PNG с прозрачным фоном.")
             return
         await msg.reply_text("Перешлите КП целиком — вместе с подписью, где цена и комплектация.")
         return
@@ -121,7 +121,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     snapshot = find_kp(msg)
     if not snapshot:
         if step == "logo":
-            await msg.reply_text("Жду логотип — картинкой или файлом PNG/JPG.")
+            await msg.reply_text("Жду логотип — файлом PNG с прозрачным фоном.")
             return
         await msg.reply_text(
             "Не нашёл это КП. Бот работает только с КП Montaro.\n\n"
@@ -150,10 +150,10 @@ async def logo_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """/logo — посмотреть или заменить логотип, не пересылая КП."""
     profile = get_client_profile(update.effective_user.id) or {}
     ctx.user_data["step"] = "logo_only"
-    text = "Пришлите новый логотип — картинкой или файлом PNG/JPG."
+    text = "Пришлите новый логотип файлом PNG с прозрачным фоном (скрепка → «Файл»)."
     if profile.get("logo_path") and Path(profile["logo_path"]).exists():
         with open(profile["logo_path"], "rb") as fh:
-            await update.message.reply_photo(photo=fh, caption="Сейчас стоит этот логотип.\n\n" + text)
+            await update.message.reply_document(document=fh, filename="logo.png", caption="Сейчас стоит этот логотип.\n\n" + text)
         return
     await update.message.reply_text("Логотипа пока нет.\n\n" + text)
 
@@ -175,8 +175,8 @@ async def ask_logo(message: Message, ctx: ContextTypes.DEFAULT_TYPE, user_id: in
     ctx.user_data["step"] = "logo"
     if profile.get("logo_path") and Path(profile["logo_path"]).exists():
         with open(profile["logo_path"], "rb") as fh:
-            await message.reply_photo(
-                photo=fh,
+            await message.reply_document(
+                document=fh, filename="logo.png",
                 caption="Ваш логотип. Оставить его?",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("✅ Оставить", callback_data="logo:keep"),
@@ -187,7 +187,7 @@ async def ask_logo(message: Message, ctx: ContextTypes.DEFAULT_TYPE, user_id: in
         return
     await message.reply_text(
         "Пришлите логотип вашей компании — он встанет на каждую страницу.\n\n"
-        "<i>Лучше всего PNG с прозрачным фоном, отправленный файлом.</i>",
+        "<i>Только PNG с прозрачным фоном, отправленный файлом (скрепка → «Файл»).</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Без логотипа", callback_data="logo:none")]]),
     )
@@ -199,43 +199,103 @@ async def on_logo_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     action = query.data.split(":")[1]
     if action == "new":
         ctx.user_data["step"] = "logo"
-        await query.message.reply_text("Пришлите новый логотип — картинкой или файлом PNG/JPG.")
+        await query.message.reply_text("Пришлите новый логотип. " + PNG_ONLY, parse_mode="HTML")
         return
     ctx.user_data["no_logo"] = action == "none"
     await ask_markup(query.message, ctx, update.effective_user.id)
 
 
+PNG_ONLY = ("Пришлите логотип <b>файлом PNG с прозрачным фоном</b>: скрепка → «Файл», "
+            "не «Фото» — картинкой Telegram сжимает его в JPG, и прозрачность пропадает.")
+
+
+def _border(img: Image.Image) -> list[tuple]:
+    """Пиксели по краю картинки — по ним видно, есть ли фон."""
+    w, h = img.size
+    px = img.load()
+    step = max(1, (w + h) // 400)
+    pts = [(x, y) for x in range(0, w, step) for y in (0, h - 1)]
+    pts += [(x, y) for y in range(0, h, step) for x in (0, w - 1)]
+    return [px[p] for p in pts]
+
+
+def check_logo(img: Image.Image) -> tuple[Image.Image | None, str]:
+    """
+    Проверка прозрачности. Возвращает (логотип RGBA | None, пояснение).
+    — край прозрачный → всё хорошо;
+    — фон сплошной одного цвета → убираем его сами и говорим об этом;
+    — фон «шахматкой» или картинкой → отказ: прозрачность только нарисована.
+    """
+    rgba = img.convert("RGBA")
+    edge = _border(rgba)
+    clear = sum(1 for p in edge if p[3] < 24) / len(edge)
+    if clear > 0.9:
+        bbox = rgba.getchannel("A").point(lambda a: 255 if a > 8 else 0).getbbox()
+        return (rgba.crop(bbox) if bbox else rgba), ""
+    opaque = [p[:3] for p in edge if p[3] > 200]
+    if not opaque:
+        return None, "Край логотипа полупрозрачный — не могу понять, где фон."
+    # сплошной фон: почти весь край одного цвета
+    ref = max(set(opaque), key=opaque.count)
+    near = lambda c: sum(abs(a - b) for a, b in zip(c, ref)) < 36
+    if sum(1 for c in opaque if near(c)) / len(opaque) > 0.95:
+        out = rgba.copy()
+        data = []
+        for r, g, b, a in out.getdata():
+            d = abs(r - ref[0]) + abs(g - ref[1]) + abs(b - ref[2])
+            # мягкий край: вблизи цвета фона плавно уходим в прозрачность
+            k = 0 if d < 24 else (255 if d > 96 else int((d - 24) / 72 * 255))
+            data.append((r, g, b, min(a, k)))
+        out.putdata(data)
+        bbox = out.getchannel("A").point(lambda a: 255 if a > 8 else 0).getbbox()
+        if not bbox:
+            return None, "На картинке не нашёл логотипа — только фон."
+        return out.crop(bbox), "removed"
+    # два чередующихся светлых цвета — нарисованная «шахматка» прозрачности
+    greys = {c for c in opaque if max(c) - min(c) < 12 and min(c) > 150}
+    if len(greys) >= 2 and sum(1 for c in opaque if c in greys) / len(opaque) > 0.9:
+        return None, ("Фон у файла не прозрачный — «шахматка» нарисована прямо на картинке. "
+                      "Так бывает с логотипами, скачанными из поиска.")
+    return None, "У логотипа есть фон — он ляжет на презентацию прямоугольником."
+
+
 async def receive_logo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if msg.document:
-        if not (msg.document.mime_type or "").startswith("image/"):
-            await msg.reply_text("Это не картинка. Пришлите логотип в PNG или JPG.")
-            return
-        tg_file = await msg.document.get_file()
-    else:
-        tg_file = await msg.photo[-1].get_file()
+    doc = msg.document
+    is_png = bool(doc) and ((doc.mime_type or "") == "image/png"
+                            or (doc.file_name or "").lower().endswith(".png"))
+    if not is_png:
+        await msg.reply_text(PNG_ONLY, parse_mode="HTML")
+        return
 
-    data = await tg_file.download_as_bytearray()
+    data = await (await doc.get_file()).download_as_bytearray()
     try:
         img = Image.open(io.BytesIO(bytes(data)))
         img.load()
+        if img.format != "PNG":
+            raise ValueError(img.format)
     except Exception:
-        await msg.reply_text("Не получилось открыть картинку. Пришлите PNG или JPG.")
+        await msg.reply_text("Не получилось открыть файл как PNG. " + PNG_ONLY, parse_mode="HTML")
+        return
+
+    logo, why = check_logo(img)
+    if logo is None:
+        await msg.reply_text(f"⚠️ {why}\n\n{PNG_ONLY}", parse_mode="HTML")
         return
 
     LOGO_DIR.mkdir(parents=True, exist_ok=True)
     path = LOGO_DIR / f"{update.effective_user.id}.png"
-    img.convert("RGBA").save(path, "PNG")
+    logo.save(path, "PNG")
     save_client_logo(update.effective_user.id, str(path))
     ctx.user_data["no_logo"] = False
 
     note = ""
-    if min(img.size) < 200:
-        note = ("\n\n⚠️ Логотип маленький — в презентации он может выглядеть размыто. "
-                "Если есть покрупнее, пришлите его позже через «Заменить».")
-    elif img.mode not in ("RGBA", "LA", "P") and msg.photo:
-        note = ("\n\n💡 Фото без прозрачного фона ляжет на синий фон прямоугольником. "
-                "PNG-файлом будет аккуратнее.")
+    if why == "removed":
+        note = ("\n\n💡 У файла был сплошной фон — я его убрал. Проверьте логотип в превью; "
+                "если края неаккуратные, пришлите PNG с прозрачным фоном через /logo.")
+    if min(logo.size) < 60 or max(logo.size) < 300:
+        note += ("\n\n⚠️ Логотип маленький — в презентации он может выглядеть размыто. "
+                 "Если есть покрупнее, пришлите его через /logo.")
     await msg.reply_text(f"✅ Логотип сохранён — в следующий раз загружать не нужно.{note}")
     # замена через /logo — сборки нет, дальше спрашивать нечего
     if ctx.user_data.get("step") == "logo_only" or not ctx.user_data.get("token"):
