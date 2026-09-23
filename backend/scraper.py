@@ -18,8 +18,10 @@ _DESC_ANCHOR = 'vip-vehicle-description-text">'
 _FEAT_RE = re.compile(r'\\"li\\",\\"([^\\"]{2,80})\\",\{\\"className\\":\\"CheckList')
 _ATTR_RE = re.compile(r'\\"tag\\":\\"([^\\"]+)\\",\\"value\\":\\"([^\\"]+)\\"')
 # Полное название объявления: ...,"title":"Volkswagen Tiguan Elegance 1,5 l eHybrid","url":"https://suchen.mobile.de/...
+# В названии попадаются экранированные символы: «Stop&Go Panorama» —
+# поэтому берём всё до закрывающей кавычки, а escape-последовательности разбираем
 _TITLE_RE = re.compile(
-    r'\\"title\\":\\"([^\\"]{5,140})\\",\\"url\\":\\"https://[\w.\-]*mobile\.de'
+    r'\\"title\\":\\"(.{5,160}?)\\",\\"url\\":\\"https://[\w.\-]*mobile\.de'
 )
 
 
@@ -180,7 +182,9 @@ def _extract_title_info(soup: BeautifulSoup) -> tuple[str, str, float | None]:
     title = soup.title.string if soup.title else ""
     m = re.match(r"^(.+?)\s+для\s+([\d\s\xa0 \.]+)\s*€", title)
     if m:
-        name = m.group(1).strip()
+        # в заголовке вкладки к названию приписан город: «BMW X3 в Wiesbaden» —
+        # город не часть названия машины и в КП попадать не должен
+        name = re.sub(r"\s+(?:в|in)\s+[^,]+$", "", m.group(1).strip()).strip()
         parts = name.split(None, 1)
         make = parts[0]
         model = parts[1] if len(parts) > 1 else ""
@@ -197,7 +201,9 @@ def _extract_full_title(rsc: str) -> str:
     """Полное название объявления: «Volkswagen Tiguan Elegance 1,5 l eHybrid 6-Gang-DSG»."""
     m = _TITLE_RE.search(rsc)
     if m:
-        return re.sub(r"\s{2,}", " ", m.group(1)).strip()
+        name = re.sub(r"\\+u([0-9a-fA-F]{4})", lambda x: chr(int(x.group(1), 16)), m.group(1))
+        name = name.replace("\\\\", "\\").replace('\\"', '"')
+        return re.sub(r"\s{2,}", " ", name).strip()
     return ""
 
 
