@@ -160,9 +160,11 @@ async def logo_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     text = "Пришлите новый логотип файлом PNG с прозрачным фоном (скрепка → «Файл»)."
     if profile.get("logo_path") and Path(profile["logo_path"]).exists():
         with open(profile["logo_path"], "rb") as fh:
-            await update.message.reply_document(document=fh, filename="logo.png", caption="Сейчас стоит этот логотип.\n\n" + text)
+            await update.message.reply_document(document=fh, filename="logo.png",
+                                                caption="Сейчас стоит этот логотип.\n\n" + text,
+                                                reply_markup=REMOVE_BG)
         return
-    await update.message.reply_text("Логотипа пока нет.\n\n" + text)
+    await update.message.reply_text("Логотипа пока нет.\n\n" + text, reply_markup=REMOVE_BG)
 
 
 async def on_format(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -188,6 +190,7 @@ async def ask_logo(message: Message, ctx: ContextTypes.DEFAULT_TYPE, user_id: in
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("✅ Оставить", callback_data="logo:keep"),
                      InlineKeyboardButton("🔄 Заменить", callback_data="logo:new")],
+                    [InlineKeyboardButton("✂️ Убрать фон с логотипа", url=REMOVE_BG_URL)],
                     [InlineKeyboardButton("Без логотипа в этот раз", callback_data="logo:none")],
                 ]),
             )
