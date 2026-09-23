@@ -213,7 +213,8 @@ async def on_logo_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     action = query.data.split(":")[1]
     if action == "new":
         ctx.user_data["step"] = "logo"
-        await query.message.reply_text("Пришлите новый логотип. " + PNG_ONLY, parse_mode="HTML")
+        await query.message.reply_text("Пришлите новый логотип. " + PNG_ONLY + REMOVE_BG_HOWTO,
+                                       parse_mode="HTML", reply_markup=REMOVE_BG)
         return
     ctx.user_data["no_logo"] = action == "none"
     await ask_markup(query.message, ctx, update.effective_user.id)
