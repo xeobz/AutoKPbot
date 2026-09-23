@@ -116,6 +116,15 @@ _DRIVE_WORDS = (
 )
 
 
+# Заводские коды опций в описании: «4X4 Seitenairbags vorn und hinten». Код 4X4
+# у Audi и VW значит боковые подушки, а не полный привод — коды убираем
+_OPTION_CODE_RE = re.compile(r"(?m)^[ \t]*[0-9][A-Za-z0-9]{2}(?=\s+[^\s])[ \t]*")
+
+
+def _strip_option_codes(text: str) -> str:
+    return _OPTION_CODE_RE.sub("", text)
+
+
 def drive_of(d: dict) -> str:
     """«4MATIC» / «полный» / «» — если в объявлении про привод ничего нет."""
     title = d.get("title") or ""
@@ -128,7 +137,7 @@ def drive_of(d: dict) -> str:
 
     # Дальше — чек-лист и описание продавца
     extra = " ".join([str(f) for f in (d.get("features") or [])]
-                     + [str(d.get("description") or "")])
+                     + [_strip_option_codes(str(d.get("description") or ""))])
     for pattern, name in _DRIVE_PATTERNS:
         if re.search(pattern, extra, re.IGNORECASE):
             return name
