@@ -103,7 +103,15 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     step = ctx.user_data.get("step")
 
-    if step in ("logo", "logo_only") and (msg.photo or msg.document):
+    # Переслали новое КП посреди диалога — начинаем с него, а не ругаемся на логотип
+    kp_snapshot = find_kp(msg) if (msg.caption or msg.text) else None
+
+    if step in ("logo", "logo_only") and (msg.photo or msg.document) and not kp_snapshot:
+        # альбом из шести фото — шесть сообщений: отвечаем на него один раз
+        if msg.media_group_id:
+            if ctx.user_data.get("logo_album") == msg.media_group_id:
+                return
+            ctx.user_data["logo_album"] = msg.media_group_id
         return await receive_logo(update, ctx)
     if step == "markup" and msg.text:
         return await receive_markup_amount(update, ctx)
@@ -125,7 +133,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await msg.reply_text("Перешлите КП целиком — вместе с подписью, где цена и комплектация.")
         return
 
-    snapshot = find_kp(msg)
+    snapshot = kp_snapshot
     if not snapshot:
         if step == "logo":
             await msg.reply_text("Жду логотип — файлом PNG с прозрачным фоном.")
