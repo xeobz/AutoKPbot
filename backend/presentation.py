@@ -427,7 +427,11 @@ STORY_FIT_JS = """
   var collage=document.querySelector('.collage');
   function over(){
     if(!page||!price) return false;
-    return price.getBoundingClientRect().bottom > page.getBoundingClientRect().bottom - 58;
+    var p=price.getBoundingClientRect();
+    if(p.bottom > page.getBoundingClientRect().bottom - 58) return true;
+    // блок цены прижат к низу: при нехватке места опции наезжают на него
+    var last=opts && opts.lastElementChild;
+    return !!last && last.getBoundingClientRect().bottom > p.top - 18;
   }
   if(model){
     var fs=parseFloat(getComputedStyle(model).fontSize);
