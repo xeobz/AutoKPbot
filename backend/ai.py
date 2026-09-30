@@ -689,7 +689,10 @@ async def build_title(d: dict) -> str:
     # Слова только из заголовка: иначе модель дописала бы то, чего в объявлении нет.
     # Сравниваем по буквам и цифрам: в заголовках слова слиплись через «+», «*», «°»
     source = set(_title_words(full))
-    if (answer and len(answer) <= 60 and len(answer.split()) <= 6
+    # Модель иногда просто повторяет заголовок целиком — такие ответы со
+    # слипшимися через «+» и «*» опциями отдаём коду, он их обрежет
+    clean = not re.search(r"[*+|°]", answer)
+    if (answer and clean and len(answer) <= 60 and len(_title_words(answer)) <= 7
             and all(w in source for w in _title_words(answer))):
         return answer
     if answer:
