@@ -421,7 +421,9 @@ html,body{width:1080px;height:1920px;overflow:hidden}
 # четыре строки и выталкивает цену за нижний край. Подгоняем содержимое по месту:
 # сначала уменьшаем название, потом убираем лишние опции, потом ужимаем фото.
 STORY_FIT_JS = """
-(function(){
+(async function(){
+  // меряем после загрузки шрифтов: иначе строки перевёрстываются уже после подгонки
+  try { await document.fonts.ready; } catch (e) {}
   var page=document.querySelector('.story'), price=document.querySelector('.c-price');
   var model=document.querySelector('.h-model'), opts=document.querySelector('.c-opts');
   var collage=document.querySelector('.collage');
