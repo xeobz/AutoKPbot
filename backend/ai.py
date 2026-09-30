@@ -676,7 +676,7 @@ async def build_title(d: dict) -> str:
     full = (d.get("title") or "").strip()
     if not full:
         return ""
-    if len(full.split()) <= 5:
+    if len(full.split()) <= 4 and not re.search(r"[*+|°]", full):
         return full
 
     fallback = short_title(full)
@@ -692,7 +692,7 @@ async def build_title(d: dict) -> str:
     # Модель иногда просто повторяет заголовок целиком — такие ответы со
     # слипшимися через «+» и «*» опциями отдаём коду, он их обрежет
     clean = not re.search(r"[*+|°]", answer)
-    if (answer and clean and len(answer) <= 60 and len(_title_words(answer)) <= 7
+    if (answer and clean and len(answer) <= 52 and len(answer.split()) <= 7
             and all(w in source for w in _title_words(answer))):
         return answer
     if answer:
