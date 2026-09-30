@@ -647,12 +647,17 @@ FULL, TOP, EXCLUSIVE, VOLL, AKTION.
 «Audi Q3 Sportback 35 TFSI S tr. S-Line*RFK*ACC*Navi» → Audi Q3 Sportback 35 TFSI S-Line"""
 
 
+def _title_words(text: str) -> list[str]:
+    """Слова названия без разделителей: «AHK*Kamera*LED» — это три слова."""
+    return [w for w in re.split(r"[^0-9a-zA-Zа-яёА-ЯЁ]+", (text or "").lower()) if w]
+
+
 def short_title(title: str) -> str:
     """
     Название без ИИ: режем по служебным символам и оставляем пять слов.
     Грубее, чем модель, но в презентацию влезает и выдумок не содержит.
     """
-    name = re.split(r"[*|•!/]|\s[-–—]{2,}", title or "", maxsplit=1)[0]
+    name = re.split(r"[*|•!/°+]|\s[-–—]{2,}", title or "", maxsplit=1)[0]
     name = name.split(",")[0]
     words = [w for w in name.split() if w]
     return " ".join(words[:5]).strip(" .,;-/+&")
@@ -681,10 +686,11 @@ async def build_title(d: dict) -> str:
 
     answer = (await _ask(_TITLE_PROMPT, full, api_key, reasoning=256) or "").strip()
     answer = answer.splitlines()[0].strip(" \"«»") if answer else ""
-    # Слова только из заголовка: иначе модель дописала бы то, чего в объявлении нет
-    source = set(_norm(full).split())
+    # Слова только из заголовка: иначе модель дописала бы то, чего в объявлении нет.
+    # Сравниваем по буквам и цифрам: в заголовках слова слиплись через «+», «*», «°»
+    source = set(_title_words(full))
     if (answer and len(answer) <= 60 and len(answer.split()) <= 6
-            and all(w in source for w in _norm(answer).split())):
+            and all(w in source for w in _title_words(answer))):
         return answer
     if answer:
         log.warning("Короткое название от ИИ не подошло: %.80s", answer)
