@@ -417,6 +417,37 @@ html,body{width:1080px;height:1920px;overflow:hidden}
 .accent{height:4px;width:130px;background:linear-gradient(90deg,var(--acc),transparent)}
 """
 
+# Длинное название («X7 xDrive 40d M Sport PRO B&W SKY EXCLUSIVE FULL») занимает
+# четыре строки и выталкивает цену за нижний край. Подгоняем содержимое по месту:
+# сначала уменьшаем название, потом убираем лишние опции, потом ужимаем фото.
+STORY_FIT_JS = """
+(function(){
+  var page=document.querySelector('.story'), price=document.querySelector('.c-price');
+  var model=document.querySelector('.h-model'), opts=document.querySelector('.c-opts');
+  var collage=document.querySelector('.collage');
+  function over(){
+    if(!page||!price) return false;
+    return price.getBoundingClientRect().bottom > page.getBoundingClientRect().bottom - 58;
+  }
+  if(model){
+    var fs=parseFloat(getComputedStyle(model).fontSize);
+    while(over() && fs>54){ fs-=4; model.style.fontSize=fs+'px'; }
+  }
+  if(opts){
+    while(over() && opts.children.length>4){ opts.removeChild(opts.lastElementChild); }
+    if(!opts.children.length) opts.remove();
+  }
+  if(collage && !collage.classList.contains('single')){
+    var big=540, small=262;
+    while(over() && big>380){ big-=20; small-=10; collage.style.gridTemplateRows=big+'px '+small+'px'; }
+  } else if(collage){
+    var h=640;
+    while(over() && h>440){ h-=20; collage.style.gridTemplateRows=h+'px'; }
+  }
+  document.body.dataset.ready='1';
+})()
+"""
+
 # Раскладка полной комплектации по страницам: меряем реальную вёрстку после
 # загрузки шрифтов и подбираем кегль, чтобы хвост не уходил на отдельную страницу
 FLOW_JS = r"""
@@ -640,7 +671,7 @@ class Deck:
             return designs.story_html(self, layout, src, theme)
         return (f'<!doctype html><html lang="ru"><head><meta charset="utf-8">{self.font}'
                 f'<style>{BASE_CSS}{STORY_CSS}</style></head><body>{self.story_body(layout, src)}'
-                f"<script>document.body.dataset.ready='1'</script></body></html>")
+                f"<script>{STORY_FIT_JS}</script></body></html>")
 
 
 def file_name(snapshot: dict, ext: str) -> str:
