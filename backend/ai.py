@@ -659,8 +659,11 @@ def short_title(title: str) -> str:
     """
     name = re.split(r"[*|•!/°+]|\s[-–—]{2,}", title or "", maxsplit=1)[0]
     name = name.split(",")[0]
-    words = [w for w in name.split() if w]
-    return " ".join(words[:5]).strip(" .,;-/+&")
+    words = [w for w in name.split() if w][:5]
+    # «Audi Q3 35 TDI S» — обрубок версии в конце только путает
+    while len(words) > 3 and len(words[-1]) < 2:
+        words.pop()
+    return " ".join(words).strip(" .,;-/+&")
 
 
 async def build_title(d: dict) -> str:
@@ -692,7 +695,7 @@ async def build_title(d: dict) -> str:
     # Модель иногда просто повторяет заголовок целиком — такие ответы со
     # слипшимися через «+» и «*» опциями отдаём коду, он их обрежет
     clean = not re.search(r"[*+|°]", answer)
-    if (answer and clean and len(answer) <= 52 and len(answer.split()) <= 7
+    if (answer and clean and len(answer) <= 52 and len(answer.split()) <= 8
             and all(w in source for w in _title_words(answer))):
         return answer
     if answer:
