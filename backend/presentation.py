@@ -524,7 +524,7 @@ class Deck:
         self.font = font_css(self.font_src("manrope"))
         self.logo_light = logo_light
         self.d = d
-        self.make, self.model, self.engine_tag = split_title(d.get("title") or "")
+        self.make, self.model, self.engine_tag = split_title(d.get("kp_title") or d.get("title") or "")
         self.price = int(snapshot["price_rub"]) + max(0, int(markup_rub or 0))
         self.logo_src = logo_src
         self.cover = cover_specs(d)
@@ -683,7 +683,7 @@ class Deck:
 def file_name(snapshot: dict, ext: str) -> str:
     """«Volkswagen_Tiguan_R-Line_2023.pdf» — латиница, цифры, дефис."""
     d = snapshot["data"]
-    make, model, engine = split_title(d.get("title") or "")
+    make, model, engine = split_title(d.get("kp_title") or d.get("title") or "")
     # двигатель в имя не берём: «2.0 TDI» превращался в «2_0TDI»
     raw = "_".join(x for x in (make, model.replace("\u2011", "-"), str(d.get("year") or "")) if x)
     stem = re.sub(r"[^A-Za-z0-9\-]+", "_", raw).strip("_") or "presentation"

@@ -211,8 +211,11 @@ def build_spec_lines(d: dict, country: str = "", delivery: str = "") -> list[str
 
 
 def car_title(d: dict) -> str:
-    """Полное название объявления, с фолбэком на марку/модель."""
-    title = (d.get("title") or "").strip()
+    """
+    Название машины для КП: короткое, если его уже собрали (ai.build_title),
+    иначе заголовок объявления, иначе марка с моделью.
+    """
+    title = (d.get("kp_title") or "").strip() or (d.get("title") or "").strip()
     if title:
         return title
     return " ".join(

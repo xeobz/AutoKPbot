@@ -32,7 +32,7 @@ from telegram import Bot
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-from ai import build_options
+from ai import build_options, build_title
 from calc import (
     DIRECTION_FIELDS,
     DIRECTION_LABELS,
@@ -377,8 +377,13 @@ async def preview(req: PreviewReq, user: dict = Depends(current_user)):
     # текст, который менеджер видел в предпросмотре.
     # Запасной список (ИИ не ответил) не запоминаем: иначе одна осечка залипнет
     # в черновике, и повторная отправка выдаст тот же голый чек-лист.
+    # Короткое название тоже считаем один раз — и показываем то же, что уйдёт клиенту
+    d["kp_title"] = await build_title(d)
     if options and d.get("kp_options_source") == "ai":
         rec["data"]["kp_options"] = options
+    if d.get("kp_title"):
+        rec["data"]["kp_title"] = d["kp_title"]
+    if (options and d.get("kp_options_source") == "ai") or d.get("kp_title"):
         save_draft(req.draft_id, rec["user_id"], rec["chat_id"], rec["data"])
 
     # Номер лота присваивается при записи в таблицу — в предпросмотре его ещё нет

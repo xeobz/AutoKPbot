@@ -626,3 +626,66 @@ async def build_options(d: dict) -> list[str]:
         log.warning("Разбор занял %.0fс — склейку повторов пропускаю",
                     time.monotonic() - started)
     return sorted(options, key=_sort_key)
+
+
+# ── Короткое название машины ────────────────────────────────────────────────
+
+_TITLE_PROMPT = """Тебе дают заголовок объявления о продаже автомобиля с
+немецкого сайта. Продавцы пишут в него всё подряд: комплектацию, рекламу,
+сокращения для поиска.
+
+Верни короткое понятное название машины: марка, модель и версия — не больше
+пяти слов. Ничего не придумывай и не переводи: бери слова только из заголовка.
+Выброси рекламу, перечисление опций, цены, телефоны, восклицания и слова вроде
+FULL, TOP, EXCLUSIVE, VOLL, AKTION.
+
+В ответе только название, одной строкой, без кавычек и пояснений.
+
+Примеры:
+«BMW X7 xDrive 40d M Sport PRO B&W SKY EXCLUSIVE FULL» → BMW X7 xDrive 40d M Sport
+«VW Tiguan 2.0 TDI DSG Navi Kamera ACC SHZ AHK !!!» → VW Tiguan 2.0 TDI DSG
+«Audi Q3 Sportback 35 TFSI S tr. S-Line*RFK*ACC*Navi» → Audi Q3 Sportback 35 TFSI S-Line"""
+
+
+def short_title(title: str) -> str:
+    """
+    Название без ИИ: режем по служебным символам и оставляем пять слов.
+    Грубее, чем модель, но в презентацию влезает и выдумок не содержит.
+    """
+    name = re.split(r"[*|•!/]|\s[-–—]{2,}", title or "", maxsplit=1)[0]
+    name = name.split(",")[0]
+    words = [w for w in name.split() if w]
+    return " ".join(words[:5]).strip(" .,;-/+&")
+
+
+async def build_title(d: dict) -> str:
+    """
+    Короткое название для КП и презентации. Заголовок объявления бывает
+    длиной в строку опций — в макете он ломает вёрстку, а клиенту ничего
+    не говорит. Модель отвечает быстро и словами из самого заголовка.
+    """
+    cached = d.get("kp_title")
+    if isinstance(cached, str) and cached.strip():
+        return cached.strip()
+
+    full = (d.get("title") or "").strip()
+    if not full:
+        return ""
+    if len(full.split()) <= 5:
+        return full
+
+    fallback = short_title(full)
+    api_key = get_openrouter_key()
+    if not api_key:
+        return fallback
+
+    answer = (await _ask(_TITLE_PROMPT, full, api_key, reasoning=256) or "").strip()
+    answer = answer.splitlines()[0].strip(" \"«»") if answer else ""
+    # Слова только из заголовка: иначе модель дописала бы то, чего в объявлении нет
+    source = set(_norm(full).split())
+    if (answer and len(answer) <= 60 and len(answer.split()) <= 6
+            and all(w in source for w in _norm(answer).split())):
+        return answer
+    if answer:
+        log.warning("Короткое название от ИИ не подошло: %.80s", answer)
+    return fallback

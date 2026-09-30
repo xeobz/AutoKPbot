@@ -7,7 +7,7 @@ import re
 
 from telegram import InputMediaPhoto
 
-from ai import build_options
+from ai import build_options, build_title
 from calc import total_rub, util_is_reduced
 from kp import brand_candidates, build_kp_parts
 from storage import (get_brand_emoji, get_float, get_optional, get_setting,
@@ -89,6 +89,7 @@ async def build_captions(
     если Telegram откажется принять custom emoji.
     """
     options = await build_options(d)
+    d["kp_title"] = await build_title(d)
     total   = total_rub(d)
 
     # Сначала пробуем составную марку («Alfa Romeo»), потом одно слово
