@@ -403,11 +403,11 @@ html,body{width:1080px;height:1920px;overflow:hidden}
 .chips{margin-top:22px}.chip{padding:9px 20px;font-size:20px}
 /* Рамки под пропорции снимков (4:3): фото ложится в них без полей по бокам */
 .collage{margin:24px 0 0;display:flex;flex-direction:column;align-items:center;gap:10px}
-.collage .slot{width:880px;height:660px}
-.collage.single .slot{width:952px;height:714px}
+.collage .slot{width:800px;height:600px}
+.collage.single .slot{width:912px;height:684px}
 .collage .row{display:flex;gap:10px;justify-content:center}
-.collage .row .slot{width:435px;height:326px}
-.collage .row.one .slot{width:580px;height:435px}
+.collage .row .slot{width:395px;height:296px}
+.collage .row.one .slot{width:530px;height:398px}
 .c-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-top:24px}
 .c-grid .spec-card{border-radius:14px;padding:13px 14px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
 .c-grid .lbl{font-size:14px}.c-grid .val{font-size:21px;font-weight:700}
