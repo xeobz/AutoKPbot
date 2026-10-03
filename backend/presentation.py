@@ -694,36 +694,35 @@ def file_name(snapshot: dict, ext: str) -> str:
 
 def crop_dealer_frame(img: Image.Image) -> Image.Image:
     """
-    Дилерская белая рамка и полоса с названием салона снизу. Кадр — самый
-    длинный отрезок строк, где почти нет белого.
+    Снимает дилерскую рамку — ровную однотонную полосу по всем четырём краям.
+
+    Студийный фон не трогаем: у таких фото белое только сверху, а снизу пол.
+    Срезав верх, мы прижимали бы машину к краю кадра, хотя у продавца
+    над крышей оставался воздух. Поэтому режем, только если полоса идёт
+    кругом, и не больше восьмой части кадра с каждой стороны.
     """
     g = img.convert("L")
     w, h = g.size
     small = g.resize((max(1, w // 4), max(1, h // 4)))
     sw, sh = small.size
     px = small.load()
+    corner = px[0, 0]
+    if abs(corner - px[sw - 1, 0]) > 6 or abs(corner - px[0, sh - 1]) > 6:
+        return img                                   # углы разные — рамки нет
 
-    # Порог почти единица: у студийных фото фон тоже белый, и при мягком пороге
-    # строка, где из белого торчит только крыша, считалась рамкой — машину резало
-    def row_white(y):
-        return sum(1 for x in range(sw) if px[x, y] > 238) / sw > 0.995
+    plain_row = lambda y: all(abs(px[x, y] - corner) <= 6 for x in range(sw))
+    plain_col = lambda x: all(abs(px[x, y] - corner) <= 6 for y in range(sh))
+    limit_y, limit_x = sh // 8, sw // 8
 
-    best, start = (0, 0), None
-    for y in range(sh + 1):
-        photo = y < sh and not row_white(y)
-        if photo and start is None:
-            start = y
-        elif not photo and start is not None:
-            if y - start > best[1] - best[0]:
-                best = (start, y)
-            start = None
-    y0, y1 = best
-    if y1 - y0 < sh * 0.4:
+    top = next((y for y in range(limit_y + 1) if not plain_row(y)), limit_y)
+    bottom = next((y for y in range(limit_y + 1) if not plain_row(sh - 1 - y)), limit_y)
+    left = next((x for x in range(limit_x + 1) if not plain_col(x)), limit_x)
+    right = next((x for x in range(limit_x + 1) if not plain_col(sw - 1 - x)), limit_x)
+
+    # рамка — это полоса со всех сторон; одна белая кромка сверху ею не считается
+    if min(top, bottom, left, right) < 1:
         return img
-    cols = [x for x in range(sw)
-            if sum(1 for y in range(y0, y1) if px[x, y] > 238) / max(1, y1 - y0) <= 0.995]
-    x0, x1 = (cols[0], cols[-1] + 1) if cols else (0, sw)
-    return img.crop((x0 * 4 + 4, y0 * 4 + 4, x1 * 4 - 4, y1 * 4 - 4))
+    return img.crop((left * 4, top * 4, w - right * 4, h - bottom * 4))
 
 
 async def cached_photo(url: str) -> Path | None:
