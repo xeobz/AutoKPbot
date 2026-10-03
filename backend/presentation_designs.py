@@ -154,11 +154,11 @@ body{font-family:'DejaVu Sans',Arial,sans-serif;line-height:1.164}
 .lg{position:absolute;left:48pt;top:34pt;height:26pt;max-width:200pt;display:flex;align-items:center}
 .lg img{max-height:26pt;max-width:200pt;object-fit:contain;object-position:left center;display:block}
 .lg.plate{background:#17191c;padding:4pt 8pt;border-radius:3pt;top:31pt;height:32pt}
-.matte{position:absolute;background:var(--matte);overflow:hidden}
-.matte.dark{background:var(--matte2)}
+.matte{position:absolute;background:transparent;overflow:hidden}
+.matte.dark{background:transparent}
 .matte .slot{width:100%;height:100%;background:transparent}
 .slot{overflow:hidden;position:relative}
-.slot img{width:100%;height:100%;object-fit:cover;display:block;user-select:none;-webkit-user-drag:none}
+.slot img{width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none}
 /* стр. 1 */
 .c1-left{position:absolute;left:48pt;top:137pt;width:330pt}
 .c1-make{font-size:var(--make);font-weight:700;color:var(--mute);text-transform:uppercase;letter-spacing:.06em}
@@ -384,11 +384,11 @@ body{font-family:'DejaVu Sans',Arial,sans-serif;line-height:1.164}
 .st-photos.single{grid-template-rows:620px}
 .st-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .st-row.one{grid-template-columns:1fr}
-.st-matte{background:var(--matte);overflow:hidden}
-.st-matte.dark{background:var(--matte2)}
+.st-matte{background:transparent;overflow:hidden}
+.st-matte.dark{background:transparent}
 .st-matte .slot{width:100%;height:100%}
 .slot{overflow:hidden;position:relative}
-.slot img{width:100%;height:100%;object-fit:cover;display:block;user-select:none;-webkit-user-drag:none}
+.slot img{width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none}
 .st-specs{display:flex;gap:22px;margin-top:40px}
 .st-spec{flex:1;border-top:2px solid var(--line);padding-top:20px;position:relative}
 .st-spec .num{font-size:15px;font-weight:700;color:var(--acc)}

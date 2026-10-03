@@ -323,8 +323,8 @@ html,body{background:#04122e;color:var(--ink);font-family:Manrope,Arial,sans-ser
 .bg{background:radial-gradient(1300px 780px at 88% -10%,#1b4f9e 0%,rgba(10,35,80,0) 62%),
  radial-gradient(1000px 700px at -10% 108%,#0d3a7d 0%,rgba(6,20,48,0) 58%),
  linear-gradient(160deg,#04122e 0%,#061a3d 48%,#020a1c 100%)}
-.slot{overflow:hidden;position:relative;background:#0a1e44}
-.slot img{width:100%;height:100%;object-fit:cover;display:block;user-select:none;-webkit-user-drag:none}
+.slot{overflow:hidden;position:relative;background:transparent}
+.slot img{width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none}
 .logo{display:block;object-fit:contain;object-position:left center}
 .ic{width:24px;height:24px;flex:none;color:var(--acc)}
 .h-make{font-weight:300;letter-spacing:.34em;text-transform:uppercase;color:var(--acc2)}
