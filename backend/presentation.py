@@ -703,12 +703,14 @@ def crop_dealer_frame(img: Image.Image) -> Image.Image:
     sw, sh = small.size
     px = small.load()
 
+    # Порог почти единица: у студийных фото фон тоже белый, и при мягком пороге
+    # строка, где из белого торчит только крыша, считалась рамкой — машину резало
     def row_white(y):
-        return sum(1 for x in range(sw) if px[x, y] > 238) / sw
+        return sum(1 for x in range(sw) if px[x, y] > 238) / sw > 0.995
 
     best, start = (0, 0), None
     for y in range(sh + 1):
-        photo = y < sh and row_white(y) < 0.6
+        photo = y < sh and not row_white(y)
         if photo and start is None:
             start = y
         elif not photo and start is not None:
@@ -719,7 +721,7 @@ def crop_dealer_frame(img: Image.Image) -> Image.Image:
     if y1 - y0 < sh * 0.4:
         return img
     cols = [x for x in range(sw)
-            if sum(1 for y in range(y0, y1) if px[x, y] > 238) / max(1, y1 - y0) < 0.6]
+            if sum(1 for y in range(y0, y1) if px[x, y] > 238) / max(1, y1 - y0) <= 0.995]
     x0, x1 = (cols[0], cols[-1] + 1) if cols else (0, sw)
     return img.crop((x0 * 4 + 4, y0 * 4 + 4, x1 * 4 - 4, y1 * 4 - 4))
 
