@@ -401,10 +401,13 @@ html,body{width:1080px;height:1920px;overflow:hidden}
 .c-top .tag{font-size:17px;letter-spacing:.26em;text-transform:uppercase;color:var(--mute);margin-left:auto}
 .h-make{font-size:22px;margin-top:46px}.h-model{font-size:88px;margin-top:14px}
 .chips{margin-top:22px}.chip{padding:9px 20px;font-size:20px}
-.collage{margin:24px -64px 0;display:grid;grid-template-rows:540px 262px;gap:6px}
-.collage.single{grid-template-rows:640px}
-.collage .row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-.collage .row.one{grid-template-columns:1fr}
+/* Рамки под пропорции снимков (4:3): фото ложится в них без полей по бокам */
+.collage{margin:24px 0 0;display:flex;flex-direction:column;align-items:center;gap:10px}
+.collage .slot{width:880px;height:660px}
+.collage.single .slot{width:952px;height:714px}
+.collage .row{display:flex;gap:10px;justify-content:center}
+.collage .row .slot{width:435px;height:326px}
+.collage .row.one .slot{width:580px;height:435px}
 .c-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-top:24px}
 .c-grid .spec-card{border-radius:14px;padding:13px 14px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
 .c-grid .lbl{font-size:14px}.c-grid .val{font-size:21px;font-weight:700}
@@ -443,12 +446,18 @@ STORY_FIT_JS = """
     while(over() && opts.children.length>4){ opts.removeChild(opts.lastElementChild); }
     if(!opts.children.length) opts.remove();
   }
-  if(collage && !collage.classList.contains('single')){
-    var big=540, small=262;
-    while(over() && big>380){ big-=20; small-=10; collage.style.gridTemplateRows=big+'px '+small+'px'; }
-  } else if(collage){
-    var h=640;
-    while(over() && h>440){ h-=20; collage.style.gridTemplateRows=h+'px'; }
+  if(collage){
+    // ужимаем фото пропорционально: 4:3 сохраняем, полей по бокам не появится
+    var k=1;
+    var cells=[].slice.call(collage.querySelectorAll('.slot'));
+    var base=cells.map(function(c){ return [c.offsetWidth, c.offsetHeight]; });
+    while(over() && k>0.62){
+      k-=0.04;
+      cells.forEach(function(c,i){
+        c.style.width=Math.round(base[i][0]*k)+'px';
+        c.style.height=Math.round(base[i][1]*k)+'px';
+      });
+    }
   }
   document.body.dataset.ready='1';
 })()
