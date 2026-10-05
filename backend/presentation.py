@@ -91,6 +91,39 @@ def cover_specs(d: dict) -> list[tuple[str, str, str]]:
     return out
 
 
+# Фирменные названия привода → по-русски. Пусто — значит в объявлении про
+# привод ничего нет, и строки в сторис не будет: угадывать не берёмся
+_DRIVE_RU = {"4matic": "Полный", "xdrive": "Полный", "quattro": "Полный", "4motion": "Полный",
+             "allgrip": "Полный", "4x4": "Полный", "полный": "Полный",
+             "sdrive": "Задний", "задний": "Задний", "передний": "Передний"}
+
+
+def drive_ru(d: dict) -> str:
+    from kp import drive_of
+    return _DRIVE_RU.get((d.get("drive") or drive_of(d) or "").strip().lower(), "")
+
+
+def story_specs(d: dict) -> list[tuple[str, str, str]]:
+    """Характеристики для сторис: пробег и всё про силовую часть."""
+    out = []
+    if d.get("mileage") == 0:
+        out.append(("gauge", "Пробег", "Новый"))
+    elif d.get("mileage"):
+        out.append(("gauge", "Пробег", f"{_num(d['mileage'])} км"))
+    if d.get("power_hp"):
+        out.append(("bolt", "Мощность", f"{d['power_hp']} л.с."))
+    if d.get("engine_l"):
+        out.append(("engine", "Объём", f"{d['engine_l']} л"))
+    if d.get("fuel"):
+        out.append(("fuel", "Топливо", str(d["fuel"]).capitalize()))
+    if d.get("gearbox"):
+        out.append(("gear", "Коробка", _gearbox(d["gearbox"])))
+    drive = drive_ru(d)
+    if drive:
+        out.append(("drive", "Привод", drive))
+    return out
+
+
 def detail_specs(d: dict, country: str = "", delivery: str = "") -> list[tuple[str, str, str]]:
     """Страница «Об автомобиле» — только то, чего нет на обложке."""
     a = {k: str(v).strip() for k, v in (d.get("attrs") or {}).items() if str(v).strip()}
@@ -537,6 +570,7 @@ class Deck:
         self.price = int(snapshot["price_rub"]) + max(0, int(markup_rub or 0))
         self.logo_src = logo_src
         self.cover = cover_specs(d)
+        self.story = story_specs(d)
         self.details = detail_specs(d, country, delivery)
         self.options = [o for o in (snapshot.get("options") or []) if str(o).strip()]
         self.groups = categorize(self.options)
@@ -663,8 +697,7 @@ class Deck:
                    if smalls else "")
             collage = f'<div class="collage{"" if smalls else " single"}">{main}{row}</div>'
 
-        extra = [s for s in self.details if s[1] in ("Салон", "Владельцев", "Состояние")]
-        grid = (self.cover[:3] + extra)[:6]
+        grid = self.story[:6]
         grid_html = ('<div class="c-grid">' + "".join(
             f'<div class="spec-card">{icon(s[0])}<div class="lbl">{E(s[1])}</div>'
             f'<div class="val">{E(s[2])}</div></div>' for s in grid) + "</div>") if grid else ""

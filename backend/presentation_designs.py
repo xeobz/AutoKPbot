@@ -389,11 +389,11 @@ body{font-family:'DejaVu Sans',Arial,sans-serif;line-height:1.164}
 .st-matte .slot{width:100%;height:100%}
 .slot{overflow:hidden;position:relative}
 .slot img{width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none}
-.st-specs{display:flex;gap:22px;margin-top:40px}
-.st-spec{flex:1;border-top:2px solid var(--line);padding-top:20px;position:relative}
+.st-specs{display:grid;grid-template-columns:repeat(3,1fr);gap:26px 22px;margin-top:36px}
+.st-spec{border-top:2px solid var(--line);padding-top:18px;position:relative;min-width:0}
 .st-spec .num{font-size:15px;font-weight:700;color:var(--acc)}
 .st-spec .lbl{font-size:15px;font-weight:700;color:var(--mute);text-transform:uppercase;letter-spacing:.06em;margin-left:12px}
-.st-spec .val{font-size:28px;font-weight:700;margin-top:14px;white-space:nowrap}
+.st-spec .val{font-size:27px;font-weight:700;margin-top:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .st-keys{display:grid;grid-template-columns:1fr 1fr;gap:0 40px;margin-top:34px}
 .st-key{display:flex;gap:18px;padding:16px 0;border-bottom:2px solid var(--line);font-size:23px;font-weight:700;line-height:1.3}
 .st-key .num{font-size:15px;font-weight:700;color:var(--acc);padding-top:6px;flex:none}
@@ -421,8 +421,9 @@ def story_html(deck, layout: dict, src, theme: str) -> str:
 
     specs = "".join(
         f'<div class="st-spec"><span class="num">{i + 1:02d}</span><span class="lbl">{E(lbl)}</span>'
-        f'<div class="val">{E(val)}</div></div>' for i, (_, lbl, val) in enumerate(_cover4(deck)[:3]))
-    n_keys = 4 if smalls else (6 if main else 12)
+        f'<div class="val">{E(val)}</div></div>' for i, (_, lbl, val) in enumerate(deck.story[:6]))
+    # второй ряд характеристик занимает место — ключевых опций чуть меньше
+    n_keys = (2 if len(deck.story) > 3 else 4) if smalls else (6 if main else 12)
     keys = "".join(
         f'<div class="st-key"><span class="num">{i + 1:02d}</span><span>{E(o)}</span></div>'
         for i, o in enumerate(key_options(deck.options, n_keys)))
