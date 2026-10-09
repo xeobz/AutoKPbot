@@ -277,11 +277,27 @@ _BASIC = (
 )
 
 
+# То, что сильнее всего влияет на цену и интерес: при обрезке по лимиту
+# подписи остаётся первым. Без этого выживали первые по алфавиту строки,
+# а пневмоподвеска и панорама уходили в хвост и отрезались
+_TOP = (
+    "пневм", "панорам", "люк", "массаж", "вентиляц", "проекцион", "head-up",
+    "harman", "kardon", "bang & olufsen", "burmester", "bowers", "meridian", "bose",
+    "пакет", "m sport", "amg", "s line", "r-line", "rs ", "night",
+    "360", "кругов", "ночного видения", "лазер", "матрич", "matrix", "iconic glow",
+    "driving assistant", "ассистент вождения", "адаптивный круиз",
+    "подруливающ", "полноуправляем", "задних колес", "диски", "фаркоп",
+    "подогрев руля", "подогрев задних", "доводчик", "4-зон", "четырехзон",
+    "кожа", "nappa", "merino", "individual", "carbon", "карбон",
+)
+
+
 def _by_value(options: list[str]) -> list[str]:
-    """Порядок обрезки: ценное впереди, базовое в хвосте. Внутри — алфавит."""
+    """Порядок обрезки: главное, потом прочее ценное, базовое в хвосте."""
     basic = [o for o in options if any(b in o.lower() for b in _BASIC)]
-    rich  = [o for o in options if o not in basic]
-    return rich + basic
+    top   = [o for o in options if o not in basic and any(t in o.lower() for t in _TOP)]
+    rest  = [o for o in options if o not in basic and o not in top]
+    return top + rest + basic
 
 
 def _order_link(contact: str, emoji_id: str | None = None,

@@ -158,7 +158,13 @@ _PROMPT_BASE = f"""Ты извлекаешь комплектацию автом
     замок, усилитель руля, электростеклоподъёмники, бортовой компьютер,
     штатное радио, Bluetooth, USB, контроль давления в шинах, аварийный
     комплект, противотуманные фары, старт-стоп.
-18. Не больше 25 строк. Если ценного набралось больше, оставь то, что
+18. Не дублируй уровень одной и той же системы. Есть фирменная
+    аудиосистема (Harman Kardon, Bang & Olufsen, Burmester, Bowers & Wilkins,
+    Meridian, Bose) — базовую «HiFi» / «акустическую систему» отдельной
+    строкой не выводи. Есть пневмоподвеска (Luftfederung, Luftfeder,
+    Luftfahrwerk, Airmatic, Air Suspension) — пиши «Пневмоподвеска…» и
+    адаптивную подвеску отдельной строкой не выводи.
+19. Не больше 25 строк. Если ценного набралось больше, оставь то, что
     сильнее влияет на цену: пакеты, оптику, подвеску, салон, аудиосистему,
     камеры и ассистенты, диски, панораму, обогревы и вентиляцию.
 
@@ -571,7 +577,7 @@ async def build_options(d: dict) -> list[str]:
     # Уже посчитано в предпросмотре — второй раз модель не гоняем
     cached = d.get("kp_options")
     if isinstance(cached, list) and cached:
-        return [str(x) for x in cached]
+        return _drop_superseded([str(x) for x in cached])
 
     features, description = _sources(d)
     if not features and not description:
@@ -625,7 +631,31 @@ async def build_options(d: dict) -> list[str]:
     else:
         log.warning("Разбор занял %.0fс — склейку повторов пропускаю",
                     time.monotonic() - started)
-    return sorted(options, key=_sort_key)
+    return sorted(_drop_superseded(options), key=_sort_key)
+
+
+# Премиальная аудиосистема и пневмоподвеска перекрывают свои же базовые версии:
+# «Акустическая система HiFi» рядом с Harman Kardon выглядит как ошибка
+_PREMIUM_AUDIO = ("harman", "kardon", "bang & olufsen", "b&o", "burmester",
+                  "bowers", "meridian", "bose", "sound system premium")
+_BASIC_AUDIO = ("hifi", "hi-fi", "акустическая система", "аудиосистема")
+_AIR = ("пневм", "airmatic", "air suspension")
+_ADAPTIVE_SUSP = ("адаптивная подвеска", "адаптивное шасси", "адаптивная ходовая")
+
+
+def _drop_superseded(options: list[str]) -> list[str]:
+    low = [o.lower() for o in options]
+    has_audio = any(any(k in o for k in _PREMIUM_AUDIO) for o in low)
+    has_air = any(any(k in o for k in _AIR) for o in low)
+    out = []
+    for o, lo in zip(options, low):
+        if (has_audio and any(k in lo for k in _BASIC_AUDIO)
+                and not any(k in lo for k in _PREMIUM_AUDIO)):
+            continue
+        if has_air and any(k in lo for k in _ADAPTIVE_SUSP) and not any(k in lo for k in _AIR):
+            continue
+        out.append(o)
+    return out
 
 
 # ── Короткое название машины ────────────────────────────────────────────────
