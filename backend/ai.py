@@ -643,7 +643,33 @@ _AIR = ("пневм", "airmatic", "air suspension")
 _ADAPTIVE_SUSP = ("адаптивная подвеска", "адаптивное шасси", "адаптивная ходовая")
 
 
+# Немецкие слова, которые модель оставляет внутри русской строки — чаще всего
+# в названии дизайна дисков: «Легкосплавные диски 22" Doppelspeiche 742 M».
+# Номер дизайна (742 M) — фирменное обозначение, его сохраняем
+_LEFTOVERS = [
+    (r"\bDoppelspeichen?\b", "с двойными спицами"),
+    (r"\bSternspeichen?\b", "со звездообразными спицами"),
+    (r"\bVielspeichen?\b", "многоспицевые"),
+    (r"\b([VYW])-?Speichen?\b", r"с \1-образными спицами"),
+    (r"\bSpeichen?\b", "спицы"),
+    (r"\bBicolou?r\b", "двухцветные"),
+    (r"\bSchwarz\b", "черные"),
+    (r"\bglanzgedreht\b", "с полированной поверхностью"),
+    (r"\bLeichtmetallr(?:ä|ae)der\b", "легкосплавные диски"),
+]
+
+
+def _fix_leftovers(line: str) -> str:
+    out = line
+    for pat, repl in _LEFTOVERS:
+        out = re.sub(pat, repl, out, flags=re.IGNORECASE)
+    # «диски 22" с двойными спицами 742 M» → «диски 22" 742 M с двойными спицами»
+    out = re.sub(r"(со? [\w-]+ спицами)\s+(\d{2,4}(?:\s?[A-ZА-Я]{1,2})?)\b", r"\2 \1", out)
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
 def _drop_superseded(options: list[str]) -> list[str]:
+    options = [_fix_leftovers(o) for o in options]
     low = [o.lower() for o in options]
     has_audio = any(any(k in o for k in _PREMIUM_AUDIO) for o in low)
     has_air = any(any(k in o for k in _AIR) for o in low)
