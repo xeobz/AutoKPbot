@@ -119,6 +119,9 @@ def to_scraped(it: dict) -> dict:
     material = _MATERIAL.get((it.get("interiorMaterial") or "").lower(), it.get("interiorMaterial") or "")
     interior = ", ".join(x for x in (material, _ru_color(it.get("interiorColor") or "")) if x)
     color = _ru_color(it.get("colorRaw") or it.get("color") or "")
+    # «Металлик» актор кладёт в заводское название цвета: «Chronosgrau Metallic»
+    if "metallic" in (it.get("colorManufacturer") or "").lower() and "металлик" not in color:
+        color = f"{color} металлик".strip()
     kw, ps = it.get("powerKw"), it.get("powerPs")
 
     attrs = {

@@ -868,6 +868,10 @@ async def scrape_mobile_de(url: str) -> dict:
     listing_id = mobile_de_id(url)
     url = normalise_mobile_de(url)
 
+    cached = _APIFY_CACHE.get(listing_id)
+    if cached and time.monotonic() - cached[0] < _APIFY_CACHE_TTL:
+        return copy.deepcopy(cached[1])
+
     # 1. С сервера: быстрый запрос, потом браузер (внутри него две загрузки —
     #    страница иногда отдаётся только со второго раза)
     try:
@@ -882,9 +886,6 @@ async def scrape_mobile_de(url: str) -> dict:
     # 2. Через Apify
     if not listing_id or not apify_mobile.token():
         raise SiteBlocked()
-    cached = _APIFY_CACHE.get(listing_id)
-    if cached and time.monotonic() - cached[0] < _APIFY_CACHE_TTL:
-        return copy.deepcopy(cached[1])
     try:
         data = await apify_mobile.fetch_listing(listing_id)
     except apify_mobile.ListingGone:
