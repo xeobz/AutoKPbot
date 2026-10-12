@@ -177,10 +177,12 @@ async def fetch_listing(listing_id: str) -> dict:
     tok = token()
     if not tok:
         raise Exception("Apify не настроен")
-    async with httpx.AsyncClient(timeout=RUN_TIMEOUT + 30) as client:
+    # Токен в заголовке, а не в адресе: адреса запросов httpx пишет в журнал
+    async with httpx.AsyncClient(timeout=RUN_TIMEOUT + 30,
+                                 headers={"Authorization": f"Bearer {tok}"}) as client:
         r = await client.post(
             f"https://api.apify.com/v2/acts/{ACTOR}/runs",
-            params={"token": tok, "waitForFinish": RUN_TIMEOUT},
+            params={"waitForFinish": RUN_TIMEOUT},
             json={"startUrls": [canonical_url(listing_id)], "maxResults": 1,
                   "includeDetails": True, "descriptionFormat": "text"},
         )
@@ -188,14 +190,13 @@ async def fetch_listing(listing_id: str) -> dict:
             raise Exception(f"Apify ответил {r.status_code}: {r.text[:200]}")
         run = r.json()["data"]
         items = (await client.get(
-            f"https://api.apify.com/v2/datasets/{run['defaultDatasetId']}/items",
-            params={"token": tok})).json()
+            f"https://api.apify.com/v2/datasets/{run['defaultDatasetId']}/items")).json()
         if items:
             log.info("Apify: объявление %s получено, $%.4f", listing_id,
                      run.get("usageTotalUsd") or 0)
             return to_scraped(items[0])
-        status = (await client.get(f"https://api.apify.com/v2/actor-runs/{run['id']}",
-                                   params={"token": tok})).json()["data"].get("statusMessage") or ""
+        status = (await client.get(f"https://api.apify.com/v2/actor-runs/{run['id']}")
+                  ).json()["data"].get("statusMessage") or ""
     if "no longer on mobile.de" in status or "sold or removed" in status:
         raise ListingGone("Объявление уже снято с mobile.de или продано.")
     raise Exception(f"Apify не вернул объявление: {status or run.get('status')}")
