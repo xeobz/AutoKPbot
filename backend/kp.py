@@ -110,9 +110,9 @@ _MERCEDES_4M = r"(?<![A-Za-z0-9])4M(?![A-Za-z0-9])"
 
 _DRIVE_WORDS = (
     (("привод на четыре колеса", "полный привод", "allrad", "4wd", "awd",
-      "all wheel drive", "four wheel drive"), "полный"),
-    (("задний привод", "hinterrad", "rwd", "rear wheel drive"), "задний"),
-    (("передний привод", "vorderrad", "fwd", "front wheel drive"), "передний"),
+      "all wheel drive", "four wheel drive", "all-wheel drive", "four-wheel drive"), "полный"),
+    (("задний привод", "hinterrad", "rwd", "rear wheel drive", "rear-wheel drive"), "задний"),
+    (("передний привод", "vorderrad", "fwd", "front wheel drive", "front-wheel drive"), "передний"),
 )
 
 
