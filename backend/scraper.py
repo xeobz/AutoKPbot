@@ -389,21 +389,111 @@ def _parse_html(html: str) -> dict:
 
 # ── Загрузка страницы браузером (nodriver) ───────────────────────────────────
 
+def _blocked(html: str, blocked_markers: tuple[str, ...]) -> bool:
+    # Akamai пишет «Access Denied» с большой буквы — без учёта регистра
+    # заглушка проходила за объявление, и бот разбирал пустую страницу
+    low = (html or "").lower()
+    return any(b.lower() in low for b in blocked_markers)
+
+
+# ── Прокси для mobile.de ─────────────────────────────────────────────────────
+# Хранится в настройках (а не в .env): деплой переписывает .env из секретов.
+# Формат: host:port:login:password или http://login:password@host:port
+
+PROXY_SETTING = "mobile_de_proxy"
+
+
+def mobile_de_proxy() -> dict | None:
+    """Прокси для mobile.de из настроек или None. Остальные сайты ходят напрямую."""
+    try:
+        from storage import get_optional
+        raw = (get_optional(PROXY_SETTING) or "").strip()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    m = re.match(r"^(?:(https?|socks5h?)://)?(?:([^:@]+):([^@]+)@)?([^:@/]+):(\d+)/?$", raw)
+    if m:
+        scheme, user, pwd, host, port = m.groups()
+    else:
+        parts = raw.split(":")
+        if len(parts) != 4:
+            return None
+        host, port, user, pwd = parts
+        scheme = "http"
+    return {"scheme": scheme or "http", "host": host, "port": int(port),
+            "user": user or "", "password": pwd or ""}
+
+
+def _proxy_url(p: dict) -> str:
+    auth = f"{p['user']}:{p['password']}@" if p["user"] else ""
+    return f"{p['scheme']}://{auth}{p['host']}:{p['port']}"
+
+
+async def _start_proxy_forwarder(p: dict):
+    """
+    Chrome не умеет логин/пароль в --proxy-server. Поднимаем на 127.0.0.1
+    крошечный посредник: он добавляет авторизацию к каждому запросу и дальше
+    просто перекачивает байты в обе стороны. Возвращает (server, port).
+    """
+    import asyncio
+    import base64
+
+    token = base64.b64encode(f"{p['user']}:{p['password']}".encode()).decode()
+
+    async def pipe(src, dst):
+        try:
+            while data := await src.read(65536):
+                dst.write(data)
+                await dst.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                dst.close()
+            except Exception:
+                pass
+
+    async def handle(cr, cw):
+        try:
+            head = await cr.readuntil(b"\r\n\r\n")
+            ur, uw = await asyncio.open_connection(p["host"], p["port"])
+        except Exception:
+            cw.close()
+            return
+        line, rest = head.split(b"\r\n", 1)
+        if p["user"]:
+            line += f"\r\nProxy-Authorization: Basic {token}".encode()
+        uw.write(line + b"\r\n" + rest)
+        await uw.drain()
+        await asyncio.gather(pipe(cr, uw), pipe(ur, cw))
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    return server, server.sockets[0].getsockname()[1]
+
+
 def content_ok(html: str, ready_markers: tuple[str, ...],
                blocked_markers: tuple[str, ...]) -> bool:
     """Страница пришла целиком: нужные куски на месте, следов блокировки нет."""
     if not html:
         return False
-    if any(b in html for b in blocked_markers):
+    if _blocked(html, blocked_markers):
         return False
     return all(m in html for m in ready_markers) if ready_markers else True
 
 
 async def _fetch_html_async(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
                             profile_dir: str | None = None,
-                            ready_markers: tuple[str, ...] = ()) -> str:
+                            ready_markers: tuple[str, ...] = (),
+                            proxy: dict | None = None) -> str:
     import asyncio
     import nodriver as uc
+
+    forwarder = None
+    extra_args: list[str] = []
+    if proxy:
+        forwarder, port = await _start_proxy_forwarder(proxy)
+        extra_args.append(f"--proxy-server=http://127.0.0.1:{port}")
 
     import sys
     headless = sys.platform != "win32"
@@ -414,7 +504,7 @@ async def _fetch_html_async(url: str, warmup_url: str, blocked_markers: tuple[st
         headless=headless,
         sandbox=False,
         user_data_dir=profile_dir,
-        browser_args=["--lang=ru-RU", "--no-sandbox", "--disable-dev-shm-usage"],
+        browser_args=["--lang=ru-RU", "--no-sandbox", "--disable-dev-shm-usage", *extra_args],
     )
     import time as _time
 
@@ -442,8 +532,10 @@ async def _fetch_html_async(url: str, warmup_url: str, blocked_markers: tuple[st
                 await asyncio.sleep(3)   # пауза перед второй попыткой
     finally:
         browser.stop()
+        if forwarder:
+            forwarder.close()
 
-    if any(marker in html for marker in blocked_markers):
+    if _blocked(html, blocked_markers):
         raise Exception("Сайт отклонил запрос. Попробуй ещё раз через минуту.")
 
     return html
@@ -568,7 +660,7 @@ def _sweep_stale_temp(base: str | None, max_age_sec: int = 3600) -> None:
 
 def _browser_worker(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
                     out_path: str, err_path: str, profile_dir: str,
-                    ready_markers: tuple[str, ...] = ()) -> None:
+                    ready_markers: tuple[str, ...] = (), proxy: dict | None = None) -> None:
     """
     Тело отдельного процесса: поднимает браузер, сохраняет HTML в файл.
 
@@ -609,7 +701,7 @@ def _browser_worker(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
 
         html = loop.run_until_complete(
             _fetch_html_async(url, warmup_url, tuple(blocked_markers), profile_dir,
-                              tuple(ready_markers))
+                              tuple(ready_markers), proxy)
         )
         _Path(out_path).write_text(html, encoding="utf-8")
         code = 0
@@ -634,6 +726,7 @@ async def fetch_html(
     timeout: int = FETCH_TIMEOUT,
     ready_markers: tuple[str, ...] = (),
     prefer_http: bool = True,
+    proxy: dict | None = None,
 ) -> str:
     """
     Забирает HTML страницы.
@@ -653,7 +746,7 @@ async def fetch_html(
     import signal
 
     if prefer_http:
-        html = await fetch_html_fast(url, referer=warmup_url)
+        html = await fetch_html_fast(url, referer=warmup_url, proxy=proxy)
         if content_ok(html, ready_markers, blocked_markers):
             return html
 
@@ -682,7 +775,7 @@ async def fetch_html(
         proc = ctx.Process(
             target=_browser_worker,
             args=(url, warmup_url, tuple(blocked_markers), str(out), str(err),
-                  str(profile), tuple(ready_markers)),
+                  str(profile), tuple(ready_markers), proxy),
             daemon=True,
         )
         try:
@@ -729,7 +822,7 @@ _HTTP_HEADERS = {
 }
 
 
-async def fetch_html_fast(url: str, referer: str = "") -> str:
+async def fetch_html_fast(url: str, referer: str = "", proxy: dict | None = None) -> str:
     """
     Обычный HTTP-запрос без браузера — примерно полсекунды вместо десятков.
     Возвращает пустую строку, если не вышло: решение о пригодности
@@ -738,8 +831,8 @@ async def fetch_html_fast(url: str, referer: str = "") -> str:
     import httpx
 
     try:
-        async with httpx.AsyncClient(headers=_HTTP_HEADERS, follow_redirects=True,
-                                     timeout=20) as client:
+        async with httpx.AsyncClient(headers=_HTTP_HEADERS, follow_redirects=True, timeout=20,
+                                     proxy=_proxy_url(proxy) if proxy else None) as client:
             if referer:
                 client.headers["Referer"] = referer
             resp = await client.get(url)
@@ -783,12 +876,14 @@ MOBILE_DE_READY = ("self.__next_f", "classistatic.de")
 async def scrape_mobile_de(url: str) -> dict:
     """Загружает и разбирает объявление mobile.de (ссылка любой локали)."""
     url = normalise_mobile_de(url)
-    html = await fetch_html(url, ready_markers=MOBILE_DE_READY)
+    proxy = mobile_de_proxy()
+    html = await fetch_html(url, ready_markers=MOBILE_DE_READY, proxy=proxy)
     data = _parse_html(html)
 
     # Цены нет — значит пришла не та страница; пробуем ещё раз браузером
     if not data.get("price_eur"):
-        html = await fetch_html(url, ready_markers=MOBILE_DE_READY, prefer_http=False)
+        html = await fetch_html(url, ready_markers=MOBILE_DE_READY, prefer_http=False,
+                                proxy=proxy)
         data = _parse_html(html)
     return data
 
