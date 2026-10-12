@@ -570,6 +570,14 @@ async def receive_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 # ── Step 1b: direction chosen → scrape ───────────────────────────────────────
 
+async def _job_kill_stale_chrome(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    from scraper import kill_stale_chrome
+    import logging
+    n = kill_stale_chrome()
+    if n:
+        logging.getLogger("autokp.bot").warning("Убито зависших процессов Chrome: %s", n)
+
+
 async def receive_direction(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query     = update.callback_query
     await query.answer()
@@ -2104,7 +2112,10 @@ async def _post_init(app) -> None:
 
 def build_application(token: str):
     """Собирает Application со всеми хендлерами (вынесено для тестов)."""
-    app = ApplicationBuilder().token(token).post_init(_post_init).build()
+    # Параллельная обработка: пока у одного менеджера грузится объявление
+    # (десятки секунд), кнопки остальных не должны стоять в очереди
+    app = (ApplicationBuilder().token(token).post_init(_post_init)
+           .concurrent_updates(True).build())
 
     # Exclude keyboard button texts from free-text state handlers
     _text = filters.TEXT & ~filters.COMMAND & ~_KB_FILTER
@@ -2283,6 +2294,9 @@ def build_application(token: str):
     # Утренний запрос курса — 8:00 по Москве
     if app.job_queue:
         app.job_queue.run_daily(job_ask_rates, time=RATES_ASK_TIME, name="ask_rates")
+        # Зависший Chrome от парсера держит память — подчищаем раз в 10 минут
+        app.job_queue.run_repeating(_job_kill_stale_chrome, interval=600, first=30,
+                                    name="kill_stale_chrome")
         print(f"Daily rates prompt scheduled at {RATES_ASK_TIME}")
     else:
         print("WARNING: JobQueue недоступен — утренний запрос курса не будет работать. "

@@ -396,6 +396,17 @@ def _blocked(html: str, blocked_markers: tuple[str, ...]) -> bool:
     return any(b.lower() in low for b in blocked_markers)
 
 
+BLOCKED_MSG = ("mobile.de не пускает сервер (блокировка по адресу). "
+               "Попробуйте позже или пришлите ссылку ещё раз через несколько минут.")
+
+
+class SiteBlocked(Exception):
+    """Сайт ответил заглушкой блокировки — повторять бессмысленно."""
+
+    def __init__(self, msg: str = BLOCKED_MSG):
+        super().__init__(msg)
+
+
 # ── Прокси для mobile.de ─────────────────────────────────────────────────────
 # Хранится в настройках (а не в .env): деплой переписывает .env из секретов.
 # Формат: host:port:login:password или http://login:password@host:port
@@ -525,6 +536,9 @@ async def _fetch_html_async(url: str, warmup_url: str, blocked_markers: tuple[st
                 html = await page.get_content()
                 if content_ok(html, ready_markers, blocked_markers):
                     break
+                # Заглушка блокировки не «догрузится» — сразу на повтор
+                if _blocked(html, blocked_markers):
+                    break
                 await asyncio.sleep(0.4)
             if content_ok(html, ready_markers, blocked_markers):
                 break
@@ -536,7 +550,7 @@ async def _fetch_html_async(url: str, warmup_url: str, blocked_markers: tuple[st
             forwarder.close()
 
     if _blocked(html, blocked_markers):
-        raise Exception("Сайт отклонил запрос. Попробуй ещё раз через минуту.")
+        raise SiteBlocked()
 
     return html
 
@@ -637,6 +651,41 @@ def _temp_base() -> str | None:
     return None      # системный каталог по умолчанию
 
 
+def kill_stale_chrome(max_age_sec: int = 600) -> int:
+    """
+    Убивает Chrome от парсера, который пережил свой процесс: его узнаём по
+    каталогу профиля autokp_scrape_ в командной строке. Живой парсер
+    укладывается в несколько минут, всё старше — сирота, держащая память.
+    """
+    import os
+    import signal
+    import subprocess
+
+    if os.name != "posix":
+        return 0
+    try:
+        out = subprocess.run(["ps", "-eo", "pid=,etimes=,args="], capture_output=True,
+                             text=True, timeout=10).stdout
+    except Exception:
+        return 0
+    killed = 0
+    for line in out.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3 or "autokp_scrape_" not in parts[2] or "chrome" not in parts[2]:
+            continue
+        try:
+            pid, age = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        if age > max_age_sec:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed += 1
+            except OSError:
+                pass
+    return killed
+
+
 def _sweep_stale_temp(base: str | None, max_age_sec: int = 3600) -> None:
     """Подчищает каталоги от прошлых запусков, если процесс не успел прибраться."""
     import shutil
@@ -707,7 +756,8 @@ def _browser_worker(url: str, warmup_url: str, blocked_markers: tuple[str, ...],
         code = 0
     except Exception as e:
         try:
-            _Path(err_path).write_text(f"{e}", encoding="utf-8")
+            tag = "BLOCKED" if isinstance(e, SiteBlocked) else ""
+            _Path(err_path).write_text(f"{tag}{e}", encoding="utf-8")
         except Exception:
             pass
     finally:
@@ -753,6 +803,7 @@ async def fetch_html(
     ctx = multiprocessing.get_context("spawn")
     base = _temp_base()
     _sweep_stale_temp(base)
+    kill_stale_chrome()
     last_err: str = "не удалось загрузить страницу"
 
     def _kill_tree(p) -> None:
@@ -792,8 +843,12 @@ async def fetch_html(
                 return out.read_text(encoding="utf-8")
             elif err.exists():
                 last_err = err.read_text(encoding="utf-8").strip() or last_err
+                if last_err.startswith("BLOCKED"):
+                    raise SiteBlocked()
             else:
                 last_err = "браузер завершился, не отдав страницу"
+        except SiteBlocked:
+            raise
         except Exception as e:
             last_err = str(e)
         finally:
@@ -882,6 +937,8 @@ async def scrape_mobile_de(url: str) -> dict:
 
     # Цены нет — значит пришла не та страница; пробуем ещё раз браузером
     if not data.get("price_eur"):
+        if _blocked(html, ("Access denied", "Zugriff verweigert")):
+            raise SiteBlocked()
         html = await fetch_html(url, ready_markers=MOBILE_DE_READY, prefer_http=False,
                                 proxy=proxy)
         data = _parse_html(html)
