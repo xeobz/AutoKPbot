@@ -414,9 +414,124 @@ def _sources(d: dict) -> tuple[list[str], str]:
     в КП не идёт совсем: там базовое, которое клиенту ничего не говорит.
     Чек-лист возвращаем только на запасной случай — когда описания нет.
     """
-    features = _prepare(d.get("features", []) or [])
+    features = _prepare(_features_ru(d.get("features", []) or []))
     description = (d.get("description") or "").strip()
     return features, description
+
+
+# Чек-лист mobile.de через Apify приходит на английском. Он идёт в КП только
+# запасным путём (ИИ недоступен), и тогда должен быть по-русски — как раньше,
+# когда страницу открывали в русской версии сайта. Базовое (ABS, ESP, Isofix,
+# центральный замок…) и не про машину (гарантия, «некурящий») — None, выкидываем
+_FEATURES_RU = {
+    "Adaptive Cruise Control": "Адаптивный круиз-контроль",
+    "Adaptive cornering lights": "Адаптивные поворотные фары",
+    "Adaptive lighting": "Адаптивное освещение",
+    "Air suspension": "Пневмоподвеска",
+    "Alarm system": "Сигнализация",
+    "All season tyres": "Всесезонные шины",
+    "Alloy wheels": "Легкосплавные диски",
+    "Ambient lighting": "Контурная подсветка салона",
+    "Android Auto": "Android Auto",
+    "Apple CarPlay": "Apple CarPlay",
+    "Autom. dimming interior mirror": "Салонное зеркало с автозатемнением",
+    "Auxiliary heating": "Автономный отопитель",
+    "Blind spot assist": "Контроль слепых зон",
+    "Cargo barrier": "Сетка-перегородка багажника",
+    "Cruise control": "Круиз-контроль",
+    "DAB radio": "Цифровое радио DAB",
+    "Digital cockpit": "Цифровая приборная панель",
+    "Distance warning system": "Система контроля дистанции",
+    "Dynamic chassis control": "Адаптивная подвеска",
+    "Electric backseat adjustment": "Электрорегулировка задних сидений",
+    "Electric seat adjustment": "Электрорегулировка сидений",
+    "Eletric seat adjustment with memory function": "Электрорегулировка сидений с памятью",
+    "Electric seat adjustment with memory function": "Электрорегулировка сидений с памятью",
+    "Electric tailgate": "Электропривод багажника",
+    "Emergency brake assist": "Ассистент экстренного торможения",
+    "Emergency call system": "Система экстренного вызова",
+    "Fatigue warning system": "Контроль усталости водителя",
+    "Fixed trailer coupling": "Фаркоп",
+    "Fold flat passenger seat": "Складное переднее пассажирское сиденье",
+    "Folding exterior mirrors": "Электроскладывание зеркал",
+    "Folding roof": "Складная крыша",
+    "Four-wheel drive": "Полный привод",
+    "Glare-free high beam headlights": "Адаптивный дальний свет",
+    "Head-up display": "Проекционный дисплей",
+    "Heated rear seats": "Подогрев задних сидений",
+    "Heated seats": "Подогрев сидений",
+    "Heated steering wheel": "Подогрев руля",
+    "Heated windshield": "Подогрев лобового стекла",
+    "High beam assist": "Ассистент дальнего света",
+    "Hill-start assist": "Ассистент старта на подъёме",
+    "Induction charging for smartphones": "Беспроводная зарядка смартфона",
+    "Integrated music streaming": "Встроенный музыкальный стриминг",
+    "Keyless central locking": "Бесключевой доступ",
+    "LED headlights": "Светодиодные фары",
+    "LED running lights": "Светодиодные ходовые огни",
+    "Lane change assist": "Ассистент смены полосы",
+    "Lane departure warning system": "Ассистент удержания полосы",
+    "Laser headlights": "Лазерные фары",
+    "Leather steering wheel": "Кожаный руль",
+    "Lumbar support": "Поясничная поддержка",
+    "Massage seats": "Массаж сидений",
+    "Multifunction steering wheel": "Мультифункциональный руль",
+    "Navigation system": "Навигационная система",
+    "Paddle shifters": "Подрулевые лепестки",
+    "Panoramic roof": "Панорамная крыша",
+    "Parking assist system camera": "Камера заднего вида",
+    "Parking assist system self-steering": "Автоматическая парковка",
+    "Parking assist system sensors front": "Парктроник передний",
+    "Parking assist system sensors rear": "Парктроник задний",
+    "360° camera": "Камера кругового обзора",
+    "Rain sensor": "Датчик дождя",
+    "Rear traffic alert": "Контроль поперечного движения сзади",
+    "Roof rack": "Рейлинги на крыше",
+    "Seat ventilation": "Вентиляция сидений",
+    "Ski bag": "Люк для лыж",
+    "Sound system": "Аудиосистема премиум",
+    "Speed limit control system": "Ограничитель скорости",
+    "Sport seats": "Спортивные сиденья",
+    "Sports package": "Спортивный пакет",
+    "Sports suspension": "Спортивная подвеска",
+    "Sunroof": "Люк в крыше",
+    "TV": "Телевизор",
+    "Touchscreen": "Сенсорный экран",
+    "Traffic sign recognition": "Распознавание дорожных знаков",
+    "Trailer assist": "Ассистент движения с прицепом",
+    "Trailer coupling, detachable": "Съёмный фаркоп",
+    "Trailer coupling, swiveling": "Откидной фаркоп",
+    "Voice control": "Голосовое управление",
+    "WLAN / Wi-Fi hotspot": "Wi-Fi точка доступа",
+    "Winter package": "Зимний пакет",
+}
+# Базовое и не про оснащение — в КП не идёт и по-русски
+_FEATURES_DROP = {
+    "ABS", "ESP", "Isofix", "Passenger seat Isofix point", "Central locking", "Immobilizer",
+    "Power Assisted Steering", "Electric windows", "Electric side mirror", "On-board computer",
+    "Bluetooth", "USB port", "CD player", "Tuner/radio", "Hands-free kit", "Arm rest",
+    "Start-stop system", "Traction control", "Tyre pressure monitoring", "Light sensor",
+    "Daytime running lights", "Fog lamps", "Headlight washer system", "Particulate filter",
+    "Emergency tyre repair kit", "Spare tyre", "Summer tyres", "Winter tyres", "Steel wheels",
+    "Tinted windows", "Full Service History", "New service", "Non-smoker vehicle",
+    "Smoker's package", "Warranty", "Navigation preparation", "Trailer coupling preparation",
+    "Front wheel drive", "Rear wheel drive", "Divider",
+}
+
+
+def _features_ru(features: list) -> list[str]:
+    out = []
+    for f in features:
+        f = str(f).strip()
+        if not f or f in _FEATURES_DROP:
+            continue
+        ru = _FEATURES_RU.get(f)
+        if ru:
+            out.append(ru)
+        elif re.search(r"[А-Яа-яЁё]", f):
+            out.append(f)        # уже по-русски — старый разбор русской версии сайта
+        # незнакомый английский пункт не выводим: лучше без него, чем по-английски
+    return out
 
 
 _MERGE_PROMPT = f"""Тебе дают готовый список комплектации автомобиля для
