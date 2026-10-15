@@ -1,11 +1,11 @@
 // Экран «История»: список записей → карточка с расчётом, правкой полей и переотправкой КП.
-import { api } from './api.js?v=4';
+import { api } from './api.js?v=5';
 import {
   h, frag, fmtRub, toNum, toast,
   stateLoading, stateEmpty, stateError, errBox, keepFocus,
-} from './ui.js?v=4';
-import { mainButton, haptic } from './tg.js?v=4';
-import { FIELD_LABELS, DIR_FIELDS, dirLabel } from './calc.js?v=4';
+} from './ui.js?v=5';
+import { mainButton, haptic } from './tg.js?v=5';
+import { FIELD_LABELS, DIR_FIELDS, dirLabel } from './calc.js?v=5';
 
 let st = {
   list: null, listLoading: false, listError: '',

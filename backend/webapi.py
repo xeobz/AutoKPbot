@@ -52,6 +52,7 @@ from sheets import append_car_row, append_kult40_row, append_msk_row, update_car
 from storage import (
     EDITABLE_SETTINGS,
     delete_openrouter_key,
+    get_openrouter_key,
     openrouter_key_info,
     set_openrouter_key,
     SECTION_TITLES,
@@ -670,6 +671,61 @@ async def _check_openrouter_key(key: str) -> str | None:
     return None
 
 
+# Остаток денег на платных сервисах — для плашки в шапке мини-аппа.
+# Сервисы спрашиваем не чаще раза в 5 минут: мини-апп открывают часто
+_BALANCE_CACHE: dict = {"at": 0.0, "data": None}
+
+
+async def _openrouter_left(client, key: str) -> float | None:
+    if not key:
+        return None
+    auth = {"Authorization": f"Bearer {key}"}
+    r = await client.get("https://openrouter.ai/api/v1/key", headers=auth)
+    if r.status_code != 200:
+        return None
+    left = (r.json().get("data") or {}).get("limit_remaining")
+    if left is not None:
+        return float(left)          # у ключа свой лимит — он и ограничивает
+    r = await client.get("https://openrouter.ai/api/v1/credits", headers=auth)
+    if r.status_code != 200:
+        return None
+    d = r.json().get("data") or {}
+    return float(d.get("total_credits") or 0) - float(d.get("total_usage") or 0)
+
+
+async def _apify_left(client) -> float | None:
+    from apify_mobile import token as apify_token
+    tok = apify_token()
+    if not tok:
+        return None
+    r = await client.get("https://api.apify.com/v2/users/me/limits",
+                         headers={"Authorization": f"Bearer {tok}"})
+    if r.status_code != 200:
+        return None
+    d = r.json().get("data") or {}
+    limit = (d.get("limits") or {}).get("maxMonthlyUsageUsd")
+    used = (d.get("current") or {}).get("monthlyUsageUsd") or 0
+    return None if limit is None else float(limit) - float(used)
+
+
+@api.get("/balance")
+async def balance(user: dict = Depends(admin_user)):
+    if _BALANCE_CACHE["data"] and time.monotonic() - _BALANCE_CACHE["at"] < 300:
+        return _BALANCE_CACHE["data"]
+    import httpx
+    data = {"openrouter": None, "apify": None}
+    async with httpx.AsyncClient(timeout=10) as client:
+        for name, coro in (("openrouter", _openrouter_left(client, get_openrouter_key())),
+                           ("apify", _apify_left(client))):
+            try:
+                value = await coro
+                data[name] = None if value is None else round(value, 2)
+            except Exception as e:
+                log.warning("Баланс %s не получен: %s", name, e)
+    _BALANCE_CACHE.update(at=time.monotonic(), data=data)
+    return data
+
+
 @api.get("/openrouter-key")
 async def openrouter_key_get(user: dict = Depends(admin_user)):
     return openrouter_key_info()
@@ -685,6 +741,7 @@ async def openrouter_key_set(req: KeyReq, user: dict = Depends(admin_user)):
         raise HTTPException(400, error)
     set_openrouter_key(key)
     log.info("Ключ OpenRouter заменён из мини-аппа (%s)", user["name"])
+    _BALANCE_CACHE["at"] = 0.0
     return openrouter_key_info()
 
 

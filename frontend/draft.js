@@ -1,10 +1,10 @@
 // Экран выбора фото по ссылке из бота (?draft=<id>) — без вкладок, одна задача.
-import { api } from './api.js?v=4';
+import { api } from './api.js?v=5';
 import {
   h, frag, fmtEur, toast, stateLoading, stateError,
-} from './ui.js?v=4';
-import { mainButton, haptic, closeApp } from './tg.js?v=4';
-import { photoGrid, galleryBar } from './gallery.js?v=4';
+} from './ui.js?v=5';
+import { mainButton, haptic, closeApp } from './tg.js?v=5';
+import { photoGrid, galleryBar } from './gallery.js?v=5';
 
 let st = {
   id: null, data: null, loading: false, error: '',

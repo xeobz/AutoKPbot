@@ -1,13 +1,13 @@
 // Экран «Расчёт» — пошаговый визард одной прокручиваемой страницей.
 // Заполненные шаги сворачиваются в компактную строку, следующий раскрывается.
-import { api } from './api.js?v=4';
+import { api } from './api.js?v=5';
 import {
   h, frag, icon, switchToggle, fmtEur, fmtRub, fmtInt, toNum, toast,
   stateLoading, stateError, errBox, debounce, keepFocus,
-} from './ui.js?v=4';
-import { mainButton, haptic } from './tg.js?v=4';
-import { photoGrid, galleryBar } from './gallery.js?v=4';
-import { getMe } from './app.js?v=4';
+} from './ui.js?v=5';
+import { mainButton, haptic } from './tg.js?v=5';
+import { photoGrid, galleryBar } from './gallery.js?v=5';
+import { getMe } from './app.js?v=5';
 
 // Подпись у направления вместо декоративной картинки — она несёт смысл
 export const DIRECTIONS = [

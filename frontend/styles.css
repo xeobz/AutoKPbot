@@ -124,6 +124,14 @@ body.has-tabbar.has-mainbtn { --chrome: 142px; }
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .topbar-info .warn-dot { color: var(--warn); }
+/* Остаток денег на ИИ и Apify — слева от имени, только у админов */
+.topbar-info { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.balance { display: inline-flex; gap: 4px; }
+.balance .bal {
+  padding: 2px 7px; border-radius: 999px; font-size: 11px; line-height: 1.5;
+  background: var(--card); border: 1px solid var(--line-soft); color: var(--hint);
+}
+.balance .bal.low { color: var(--warn); border-color: var(--warn); }
 
 /* ---------- Карточки ---------- */
 .card {

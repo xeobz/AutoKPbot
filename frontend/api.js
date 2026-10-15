@@ -96,6 +96,7 @@ const post = (p, body) => request(p, { method: 'POST', body: body || {} });
 
 export const api = {
   me: () => get('/api/me'),
+  balance: () => get('/api/balance'),
   parse: (url) => post('/api/parse', { url }),
   calc: (payload) => post('/api/calc', payload),
   preview: (payload) => post('/api/preview', payload),

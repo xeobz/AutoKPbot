@@ -1,11 +1,11 @@
 // Точка входа: инициализация Telegram, профиль, нижние вкладки, монтирование экранов.
-import { api } from './api.js?v=4';
-import { initTg, mainButton, haptic } from './tg.js?v=4';
-import { h, stateLoading, stateError } from './ui.js?v=4';
-import { renderCalc } from './calc.js?v=4';
-import { renderHistory } from './history.js?v=4';
-import { renderSettings } from './settings.js?v=4';
-import { renderDraft } from './draft.js?v=4';
+import { api } from './api.js?v=5';
+import { initTg, mainButton, haptic } from './tg.js?v=5';
+import { h, stateLoading, stateError } from './ui.js?v=5';
+import { renderCalc } from './calc.js?v=5';
+import { renderHistory } from './history.js?v=5';
+import { renderSettings } from './settings.js?v=5';
+import { renderDraft } from './draft.js?v=5';
 
 // Отмечаемся сразу: сторож в index.html по этому флагу понимает, что модули
 // доехали и выполнились, и не показывает сообщение о неудачной загрузке
@@ -41,6 +41,7 @@ async function boot() {
   }
 
   renderTopbar();
+  loadBalance();
 
   // Открытие из бота на шаге выбора фото — сразу отдельный экран, без вкладок
   if (draftId) {
@@ -56,11 +57,34 @@ async function boot() {
 
 /* ---------- Шапка ---------- */
 
+// Плашка с остатком денег на ИИ и Apify — только админам: остальным незачем
+const balanceEl = h('span', { class: 'balance', hidden: true });
+
+function money(v) {
+  return v == null ? null : `$${v < 10 ? v.toFixed(2) : Math.round(v)}`;
+}
+
+async function loadBalance() {
+  if (!me || !me.is_admin) return;
+  try {
+    const b = await api.balance();
+    const parts = [];
+    if (b.openrouter != null) parts.push({ label: 'ИИ', v: b.openrouter, low: b.openrouter < 2 });
+    if (b.apify != null) parts.push({ label: 'Apify', v: b.apify, low: b.apify < 0.5 });
+    if (!parts.length) return;
+    balanceEl.replaceChildren(...parts.map(p =>
+      h('span', { class: 'bal' + (p.low ? ' low' : ''), text: `${p.label} ${money(p.v)}` })));
+    balanceEl.title = 'Остаток денег: ИИ (OpenRouter) и загрузка mobile.de (Apify, за месяц)';
+    balanceEl.hidden = false;
+  } catch (e) { /* плашка необязательная — без неё мини-апп работает */ }
+}
+
 function renderTopbar() {
   if (!me) { topbarEl.hidden = true; return; }
   topbarEl.hidden = false;
   const r = me.rates || {};
   topbarInfoEl.replaceChildren(
+    balanceEl,
     h('span', { text: me.name || '' }),
     r.rate_eur_usdt ? h('span', { text: ' · ' }) : null,
     r.rate_eur_usdt ? h('span', {
