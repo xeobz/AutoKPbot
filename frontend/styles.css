@@ -126,9 +126,10 @@ body.has-tabbar.has-mainbtn { --chrome: 142px; }
 .topbar-info .warn-dot { color: var(--warn); }
 /* Остаток денег на ИИ и Apify — слева от имени, только у админов */
 .topbar-info { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.balance { display: inline-flex; gap: 4px; }
+/* ИИ сверху, Apify под ним */
+.balance { display: inline-flex; flex-direction: column; align-items: stretch; gap: 2px; }
 .balance .bal {
-  padding: 2px 7px; border-radius: 999px; font-size: 11px; line-height: 1.5;
+  padding: 0 7px; border-radius: 999px; font-size: 10.5px; line-height: 1.55; text-align: center;
   background: var(--card); border: 1px solid var(--line-soft); color: var(--hint);
 }
 .balance .bal.low { color: var(--warn); border-color: var(--warn); }
