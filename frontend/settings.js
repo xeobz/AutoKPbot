@@ -1,10 +1,10 @@
 // Экран «Настройки» (только админ): разделы с полями, отдельный блок «Курс дня».
-import { api } from './api.js?v=5';
+import { api } from './api.js?v=7';
 import {
   h, frag, icon, toNum, toast,
   stateLoading, stateEmpty, stateError, errBox, keepFocus,
-} from './ui.js?v=5';
-import { haptic, mainButton } from './tg.js?v=5';
+} from './ui.js?v=7';
+import { haptic, mainButton } from './tg.js?v=7';
 
 let st = {
   data: null, loading: false, error: '',
@@ -245,6 +245,7 @@ function sectionCard(section) {
 }
 
 function settingItem(item) {
+  if (item.kind === 'choice') return choiceItem(item);
   const saving = st.savingKey === item.key;
   // Кнопка оживает только у изменённого значения — иначе это ряд одинаковых «ОК»
   const changed = String(st.values[item.key] ?? '').trim() !== String(item.value ?? '').trim();
@@ -272,6 +273,24 @@ function settingItem(item) {
         onclick: () => saveItem(item),
       }),
     ),
+  );
+}
+
+// Выбор из списка (например, актор Apify): сохраняем сразу при выборе,
+// следующий запуск уже идёт по-новому
+function choiceItem(item) {
+  const saving = st.savingKey === item.key;
+  return h('div', { class: 'field' },
+    h('span', { class: 'field-label', text: item.label }),
+    h('select', {
+      class: 'input grow',
+      disabled: saving,
+      'data-focus-key': `set-${item.key}`,
+      onchange: (e) => { st.values[item.key] = e.target.value; saveItem(item); },
+    }, ...(item.options || []).map(o => h('option', {
+      value: o.value, text: o.label,
+      selected: String(st.values[item.key] ?? item.value) === o.value,
+    }))),
   );
 }
 

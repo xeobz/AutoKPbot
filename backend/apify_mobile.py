@@ -5,8 +5,11 @@ mobile.de блокирует адрес нашего сервера (Akamai, «A
 объявление, которое не удалось открыть напрямую, забираем готовым актором
 на Apify: он ходит через свои резидентные прокси и отдаёт JSON.
 
-Актор blackfalcondata/mobile-de-scraper, $0.005 за объявление. Токен лежит
-в настройках бота (apify_token), не в коде и не в .env.
+Два актора на выбор (настройка apify_actor в мини-аппе):
+  • 3x1t/mobile-de-scraper — быстрее (10–40 с) и дешевле (~$0.002);
+  • blackfalcondata/mobile-de-scraper — $0.005, сообщает «объявление снято».
+Если выбранный не вернул объявление, пробуем второй. Токен лежит в настройках
+бота (apify_token), не в коде и не в .env.
 """
 import logging
 import re
@@ -15,7 +18,7 @@ import httpx
 
 log = logging.getLogger("autokp.apify")
 
-ACTOR = "DKQ4rrHjomlGKsYIT"
+ACTOR_SETTING = "apify_actor"
 TOKEN_SETTING = "apify_token"
 RUN_TIMEOUT = 180   # секунд на запуск актора — с учётом очереди на стороне Apify
 
@@ -140,7 +143,7 @@ def to_scraped(it: dict) -> dict:
         "manufacturerColorName": it.get("colorManufacturer") or "",
         "color": color,
         "countryVersion": _origin(it.get("origin") or ""),
-        "hu": it.get("huStatus") or "",
+        "hu": "Новые" if (it.get("huStatus") or "").lower() == "new" else (it.get("huStatus") or ""),
         "emissionClass": it.get("emissionClass") or "",
         "trimLine": it.get("trimLevel") or "",
     }
@@ -172,45 +175,193 @@ def to_scraped(it: dict) -> dict:
     }
 
 
-async def fetch_listing(listing_id: str) -> dict:
-    """Объявление через актор. ListingGone — снято; Exception — сбой Apify."""
-    tok = token()
-    if not tok:
-        raise Exception("Apify не настроен")
+# ── Ответ актора 3x1t ───────────────────────────────────────────────────────
+
+_BODY_3X1T = {
+    "suv": "Внедорожник/Пикап", "off-road": "Внедорожник/Пикап", "pickup": "Внедорожник/Пикап",
+    "estate": "Универсал", "saloon": "Седан", "limousine": "Седан", "small car": "Малолитражка",
+    "sports car": "Спорткар/Купе", "coupe": "Спорткар/Купе", "cabriolet": "Кабриолет/Родстер",
+    "roadster": "Кабриолет/Родстер", "van": "Минивэн", "minibus": "Минивэн",
+}
+
+
+def _num_from(text: str) -> int | None:
+    digits = re.sub(r"\D", "", text or "")
+    return int(digits) if digits else None
+
+
+def _climate(raw: str) -> str:
+    """«Automatic climatisation, 2 zones» → «Климат-контроль 2-зонный»."""
+    low = (raw or "").lower()
+    if not low:
+        return ""
+    zones = re.search(r"(\d)\s*zone", low)
+    if "automatic" in low:
+        return f"Климат-контроль {zones.group(1)}-зонный" if zones else "Климат-контроль"
+    if "air condition" in low:
+        return "Кондиционер"
+    return ""
+
+
+def to_scraped_3x1t(it: dict) -> dict:
+    """Ответ 3x1t → тот же словарь, что и у разбора страницы mobile.de."""
+    from scraper import (SOURCE_MOBILE_DE, normalise_fuel, normalise_gearbox,
+                         parse_engine_litres, parse_power_hp)
+
+    a = {k: str(v) for k, v in (it.get("attributes") or {}).items() if v not in (None, "")}
+    reg = a.get("First Registration", "")
+    year = reg.split("/")[-1] if "/" in reg else ""
+    ccm = _num_from(a.get("Cubic Capacity", ""))
+    power = a.get("Power", "")
+    ps = parse_power_hp(power.replace("hp", "PS"))
+    kw = _num_from(power.split("kW")[0]) if "kW" in power else None
+
+    color_raw = a.get("Colour", "")
+    color = _ru_color(color_raw)
+    if "metallic" in (a.get("Colour (Manufacturer)", "") + color_raw).lower() and "металлик" not in color:
+        color = f"{color} металлик".strip()
+
+    interior = ""
+    if a.get("Interior Design"):
+        parts = [x.strip() for x in a["Interior Design"].split(",")]
+        material = _MATERIAL.get(parts[0].lower(), parts[0])
+        interior = ", ".join(x for x in (material, *(_ru_color(x) for x in parts[1:])) if x)
+
+    body_raw = a.get("Category", "").lower()
+    body = next((ru for en, ru in _BODY_3X1T.items() if en in body_raw), a.get("Category", ""))
+    owners = _num_from(next((v for k, v in a.items() if "owner" in k.lower()), ""))
+
+    attrs = {
+        "firstRegistration": reg,
+        "category": body,
+        "cubicCapacity": f"{ccm:,} ccm".replace(",", " ") if ccm else "",
+        "power": f"{kw} кВт ({ps} л. с.)" if kw and ps else "",
+        "fuel": a.get("Fuel", ""),
+        "transmission": a.get("Transmission", ""),
+        "numSeats": a.get("Number of Seats", ""),
+        "doorCount": a.get("Door Count", ""),
+        "numberOfPreviousOwners": str(owners) if owners else "",
+        "damageCondition": _condition(a.get("Vehicle condition", "")),
+        "interior": interior,
+        "manufacturerColorName": a.get("Colour (Manufacturer)", ""),
+        "color": color,
+        "countryVersion": _origin(a.get("Origin", "")),
+        "hu": "Новые" if a.get("HU", "").lower() == "new" else a.get("HU", ""),
+        "emissionClass": a.get("Emission Class", ""),
+        "climatisation": _climate(a.get("Climatisation", "")),
+        "trimLine": a.get("Trim line", ""),
+    }
+    attrs = {k: v for k, v in attrs.items() if v}
+    price = ((it.get("price") or {}).get("total") or {}).get("amount")
+    photos = [_photo(u) for u in (it.get("images") or []) if u]
+
+    return {
+        "source": SOURCE_MOBILE_DE,
+        "photos": photos,
+        "all_photos": photos,
+        "price_eur": float(price) if price else None,
+        "make": it.get("brand") or "",
+        "model": it.get("model") or "",
+        "title": re.sub(r"\s{2,}", " ", it.get("title") or "").strip(),
+        "year": str(year),
+        "mileage": _num_from(a.get("Mileage", "")),
+        "color": color,
+        "features": list(it.get("features") or []),
+        "description": it.get("description") or "",
+        "power_hp": ps,
+        "engine_l": parse_engine_litres(f"{ccm} ccm") if ccm else None,
+        "fuel": normalise_fuel(a.get("Fuel", "")),
+        "gearbox": normalise_gearbox(a.get("Transmission", "")),
+        "country_version": "ЕС" if "ЕС" in attrs.get("countryVersion", "") else "",
+        "attrs": attrs,
+        "fetched_via": "apify:3x1t",
+    }
+
+
+# ── Акторы ──────────────────────────────────────────────────────────────────
+
+ACTORS = {
+    "3x1t": {
+        "id": "5rqwyghNIbO6VMnlX",
+        "title": "3x1t — быстрый (10–40 с, ~$0.002)",
+        "input": lambda url: {"searchPageURLs": [url], "searchPageURLMaxItems": 1},
+        "parse": to_scraped_3x1t,
+    },
+    "blackfalcon": {
+        "id": "DKQ4rrHjomlGKsYIT",
+        "title": "blackfalcondata — медленнее (до 3 мин, $0.005)",
+        "input": lambda url: {"startUrls": [url], "maxResults": 1, "includeDetails": True,
+                              "descriptionFormat": "text"},
+        "parse": lambda it: {**to_scraped(it), "fetched_via": "apify:blackfalcon"},
+    },
+}
+DEFAULT_ACTOR = "3x1t"
+
+
+def selected_actor() -> str:
+    try:
+        from storage import get_optional
+        key = (get_optional(ACTOR_SETTING) or "").strip()
+    except Exception:
+        key = ""
+    return key if key in ACTORS else DEFAULT_ACTOR
+
+
+async def _run_actor(client, key: str, listing_id: str) -> dict:
+    """Один запуск актора. ListingGone — снято; Exception — не вышло."""
     import asyncio
     import time
 
+    actor = ACTORS[key]
+    r = await client.post(f"https://api.apify.com/v2/acts/{actor['id']}/runs",
+                          params={"waitForFinish": 60},
+                          json=actor["input"](canonical_url(listing_id)))
+    if r.status_code >= 400:
+        raise Exception(f"Apify ответил {r.status_code}: {r.text[:200]}")
+    run = r.json()["data"]
+
+    # Apify держит запрос не дольше 60 секунд, а запуск иногда идёт дольше —
+    # опрашиваем, пока он не закончится, а не читаем пустой результат
+    deadline = time.monotonic() + RUN_TIMEOUT
+    while run.get("status") in ("READY", "RUNNING") and time.monotonic() < deadline:
+        await asyncio.sleep(3)
+        run = (await client.get(f"https://api.apify.com/v2/actor-runs/{run['id']}",
+                                params={"waitForFinish": 30})).json()["data"]
+    if run.get("status") in ("READY", "RUNNING"):
+        raise Exception(f"{key}: не успел за {RUN_TIMEOUT} с")
+
+    items = (await client.get(
+        f"https://api.apify.com/v2/datasets/{run['defaultDatasetId']}/items")).json()
+    if items:
+        data = actor["parse"](items[0])
+        if not data.get("price_eur"):
+            raise Exception(f"{key}: в ответе нет цены")
+        log.info("Apify %s: объявление %s получено, $%.4f", key, listing_id,
+                 run.get("usageTotalUsd") or 0)
+        return data
+    status = run.get("statusMessage") or ""
+    if "no longer on mobile.de" in status or "sold or removed" in status:
+        raise ListingGone("Объявление уже снято с mobile.de или продано.")
+    raise Exception(f"{key}: объявление не вернулось ({status or run.get('status')})")
+
+
+async def fetch_listing(listing_id: str) -> dict:
+    """Объявление через выбранный в настройках актор, при неудаче — через второй."""
+    tok = token()
+    if not tok:
+        raise Exception("Apify не настроен")
+    first = selected_actor()
+    order = [first] + [k for k in ACTORS if k != first]
+    errors = []
     # Токен в заголовке, а не в адресе: адреса запросов httpx пишет в журнал
     async with httpx.AsyncClient(timeout=90,
                                  headers={"Authorization": f"Bearer {tok}"}) as client:
-        r = await client.post(
-            f"https://api.apify.com/v2/acts/{ACTOR}/runs",
-            params={"waitForFinish": 60},
-            json={"startUrls": [canonical_url(listing_id)], "maxResults": 1,
-                  "includeDetails": True, "descriptionFormat": "text"},
-        )
-        if r.status_code >= 400:
-            raise Exception(f"Apify ответил {r.status_code}: {r.text[:200]}")
-        run = r.json()["data"]
-
-        # Apify ждёт ответа не дольше 60 секунд, а запуск иногда идёт дольше
-        # (очередь на их стороне). Раньше на этом месте читали ещё пустой
-        # результат и сдавались — теперь опрашиваем, пока запуск не закончится
-        deadline = time.monotonic() + RUN_TIMEOUT
-        while run.get("status") in ("READY", "RUNNING") and time.monotonic() < deadline:
-            await asyncio.sleep(3)
-            run = (await client.get(f"https://api.apify.com/v2/actor-runs/{run['id']}",
-                                    params={"waitForFinish": 30})).json()["data"]
-        if run.get("status") in ("READY", "RUNNING"):
-            raise Exception(f"Apify не успел за {RUN_TIMEOUT} с")
-
-        items = (await client.get(
-            f"https://api.apify.com/v2/datasets/{run['defaultDatasetId']}/items")).json()
-        if items:
-            log.info("Apify: объявление %s получено, $%.4f", listing_id,
-                     run.get("usageTotalUsd") or 0)
-            return to_scraped(items[0])
-        status = run.get("statusMessage") or ""
-    if "no longer on mobile.de" in status or "sold or removed" in status:
-        raise ListingGone("Объявление уже снято с mobile.de или продано.")
-    raise Exception(f"Apify не вернул объявление: {status or run.get('status')}")
+        for key in order:
+            try:
+                return await _run_actor(client, key, listing_id)
+            except ListingGone:
+                raise
+            except Exception as e:
+                log.warning("Apify %s не помог для %s: %s", key, listing_id, e)
+                errors.append(str(e))
+    raise Exception("; ".join(errors))

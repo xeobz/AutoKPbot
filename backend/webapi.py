@@ -51,6 +51,7 @@ from scraper import find_listing_url, scrape
 from sheets import append_car_row, append_kult40_row, append_msk_row, update_car_row
 from storage import (
     EDITABLE_SETTINGS,
+    SETTING_CHOICES,
     delete_openrouter_key,
     get_openrouter_key,
     openrouter_key_info,
@@ -606,6 +607,7 @@ async def settings_get(user: dict = Depends(admin_user)):
         sections.setdefault(section, []).append({
             "key": key, "label": label, "unit": unit,
             "kind": setting_kind(key), "value": get_setting(key),
+            "options": [{"value": v, "label": l} for v, l in SETTING_CHOICES.get(key, [])],
         })
     return {
         "sections": [
@@ -622,6 +624,13 @@ async def settings_set(req: SettingReq, user: dict = Depends(admin_user)):
         raise HTTPException(400, "Неизвестная настройка")
 
     value = req.value
+    if setting_kind(req.key) == "choice":
+        allowed = [v for v, _ in SETTING_CHOICES.get(req.key, [])]
+        if str(value) not in allowed:
+            raise HTTPException(400, "Такого варианта нет")
+        set_setting(req.key, str(value))
+        log.info("Настройка %s = %s (%s)", req.key, value, user["name"])
+        return {"key": req.key, "value": str(value)}
     if setting_kind(req.key) == "text":
         # Стоп-слова: текст как есть, число тут не при чём
         set_setting(req.key, str(value).strip())

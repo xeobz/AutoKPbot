@@ -17,6 +17,7 @@ DB_PATH = Path(__file__).parent / "bot_data.db"
 SCHEMA_VERSION = "2"
 
 _DEFAULTS = {
+    "apify_actor":      "3x1t",
     # ── Курсы — единые для всех направлений ──────────────────────────────────
     "rate_eur_usdt":    "1.1621",  # EUR → USDT (Минск: N, Культ40/МСК: M)
     "rate_usdt_rub":    "79.7",    # USDT → ₽   (Минск: P, Культ40/МСК: O)
@@ -92,6 +93,16 @@ EDITABLE_SETTINGS = {
     "img_count":        ("Сколько фото в КП",          "шт", "photo"),
     "img_step":         ("Шаг выборки фото",           "",   "photo"),
     "img_offset":       ("Пропустить первых фото",     "шт", "photo"),
+    # Через какой актор Apify грузить mobile.de, когда сервер заблокирован
+    "apify_actor":      ("Актор Apify для mobile.de",  "",   "parsing", "choice"),
+}
+
+# Варианты для настроек-списков: ключ → (значение, подпись)
+SETTING_CHOICES = {
+    "apify_actor": [
+        ("3x1t", "3x1t — быстрый (10–40 с, ~$0.002)"),
+        ("blackfalcon", "blackfalcondata — медленнее (до 3 мин, $0.005)"),
+    ],
 }
 
 SECTION_TITLES = {
@@ -99,6 +110,7 @@ SECTION_TITLES = {
     "tariffs": "Тарифы",
     "kp":      "Комплектация",
     "photo":   "Фото",
+    "parsing": "Загрузка объявлений",
 }
 
 
