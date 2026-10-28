@@ -2089,10 +2089,13 @@ class StaleCallbackHandler(CallbackQueryHandler):
 async def stale_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Ответ на устаревшую кнопку — вместо молчания."""
     query = update.callback_query
-    await query.answer(
-        "Кнопка устарела — бот перезапускался.\nОткройте раздел заново кнопкой снизу.",
-        show_alert=True,
-    )
+    try:
+        await query.answer(
+            "Кнопка устарела — бот перезапускался.\nОткройте раздел заново кнопкой снизу.",
+            show_alert=True,
+        )
+    except Exception:
+        pass   # нажатие слишком старое — Telegram уже не даёт на него ответить
 
 
 async def _post_init(app) -> None:

@@ -17,7 +17,7 @@ log = logging.getLogger("autokp.apify")
 
 ACTOR = "DKQ4rrHjomlGKsYIT"
 TOKEN_SETTING = "apify_token"
-RUN_TIMEOUT = 120   # секунд на запуск актора
+RUN_TIMEOUT = 180   # секунд на запуск актора — с учётом очереди на стороне Apify
 
 
 class ListingGone(Exception):
@@ -177,26 +177,40 @@ async def fetch_listing(listing_id: str) -> dict:
     tok = token()
     if not tok:
         raise Exception("Apify не настроен")
+    import asyncio
+    import time
+
     # Токен в заголовке, а не в адресе: адреса запросов httpx пишет в журнал
-    async with httpx.AsyncClient(timeout=RUN_TIMEOUT + 30,
+    async with httpx.AsyncClient(timeout=90,
                                  headers={"Authorization": f"Bearer {tok}"}) as client:
         r = await client.post(
             f"https://api.apify.com/v2/acts/{ACTOR}/runs",
-            params={"waitForFinish": RUN_TIMEOUT},
+            params={"waitForFinish": 60},
             json={"startUrls": [canonical_url(listing_id)], "maxResults": 1,
                   "includeDetails": True, "descriptionFormat": "text"},
         )
         if r.status_code >= 400:
             raise Exception(f"Apify ответил {r.status_code}: {r.text[:200]}")
         run = r.json()["data"]
+
+        # Apify ждёт ответа не дольше 60 секунд, а запуск иногда идёт дольше
+        # (очередь на их стороне). Раньше на этом месте читали ещё пустой
+        # результат и сдавались — теперь опрашиваем, пока запуск не закончится
+        deadline = time.monotonic() + RUN_TIMEOUT
+        while run.get("status") in ("READY", "RUNNING") and time.monotonic() < deadline:
+            await asyncio.sleep(3)
+            run = (await client.get(f"https://api.apify.com/v2/actor-runs/{run['id']}",
+                                    params={"waitForFinish": 30})).json()["data"]
+        if run.get("status") in ("READY", "RUNNING"):
+            raise Exception(f"Apify не успел за {RUN_TIMEOUT} с")
+
         items = (await client.get(
             f"https://api.apify.com/v2/datasets/{run['defaultDatasetId']}/items")).json()
         if items:
             log.info("Apify: объявление %s получено, $%.4f", listing_id,
                      run.get("usageTotalUsd") or 0)
             return to_scraped(items[0])
-        status = (await client.get(f"https://api.apify.com/v2/actor-runs/{run['id']}")
-                  ).json()["data"].get("statusMessage") or ""
+        status = run.get("statusMessage") or ""
     if "no longer on mobile.de" in status or "sold or removed" in status:
         raise ListingGone("Объявление уже снято с mobile.de или продано.")
     raise Exception(f"Apify не вернул объявление: {status or run.get('status')}")
