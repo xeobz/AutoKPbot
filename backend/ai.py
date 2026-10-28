@@ -850,7 +850,7 @@ async def build_title(d: dict) -> str:
     full = (d.get("title") or "").strip()
     if not full:
         return ""
-    if len(full.split()) <= 4 and not re.search(r"[*+|°]", full):
+    if len(full.split()) <= 4 and not re.search(r"[*+|°/]", full):
         return full
 
     fallback = short_title(full)

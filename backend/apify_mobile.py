@@ -203,6 +203,15 @@ def _climate(raw: str) -> str:
     return ""
 
 
+def _title_3x1t(it: dict) -> str:
+    """3x1t склеивает модель с версией: «BMW X5xDrive40d/…» → «BMW X5 xDrive40d/…»."""
+    title = re.sub(r"\s{2,}", " ", it.get("title") or "").strip()
+    head = f"{it.get('brand') or ''} {it.get('model') or ''}".strip()
+    if head and title.startswith(head) and title[len(head):len(head) + 1] not in ("", " "):
+        title = f"{head} {title[len(head):]}"
+    return title
+
+
 def to_scraped_3x1t(it: dict) -> dict:
     """Ответ 3x1t → тот же словарь, что и у разбора страницы mobile.de."""
     from scraper import (SOURCE_MOBILE_DE, normalise_fuel, normalise_gearbox,
@@ -262,7 +271,7 @@ def to_scraped_3x1t(it: dict) -> dict:
         "price_eur": float(price) if price else None,
         "make": it.get("brand") or "",
         "model": it.get("model") or "",
-        "title": re.sub(r"\s{2,}", " ", it.get("title") or "").strip(),
+        "title": _title_3x1t(it),
         "year": str(year),
         "mileage": _num_from(a.get("Mileage", "")),
         "color": color,
