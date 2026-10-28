@@ -1,11 +1,11 @@
 // Точка входа: инициализация Telegram, профиль, нижние вкладки, монтирование экранов.
-import { api } from './api.js?v=7';
-import { initTg, mainButton, haptic } from './tg.js?v=7';
-import { h, stateLoading, stateError } from './ui.js?v=7';
-import { renderCalc } from './calc.js?v=7';
-import { renderHistory } from './history.js?v=7';
-import { renderSettings } from './settings.js?v=7';
-import { renderDraft } from './draft.js?v=7';
+import { api } from './api.js?v=8';
+import { initTg, mainButton, haptic } from './tg.js?v=8';
+import { h, stateLoading, stateError } from './ui.js?v=8';
+import { renderCalc } from './calc.js?v=8';
+import { renderHistory } from './history.js?v=8';
+import { renderSettings } from './settings.js?v=8';
+import { renderDraft } from './draft.js?v=8';
 
 // Отмечаемся сразу: сторож в index.html по этому флагу понимает, что модули
 // доехали и выполнились, и не показывает сообщение о неудачной загрузке

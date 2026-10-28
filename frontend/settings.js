@@ -1,10 +1,10 @@
 // Экран «Настройки» (только админ): разделы с полями, отдельный блок «Курс дня».
-import { api } from './api.js?v=7';
+import { api } from './api.js?v=8';
 import {
   h, frag, icon, toNum, toast,
   stateLoading, stateEmpty, stateError, errBox, keepFocus,
-} from './ui.js?v=7';
-import { haptic, mainButton } from './tg.js?v=7';
+} from './ui.js?v=8';
+import { haptic, mainButton } from './tg.js?v=8';
 
 let st = {
   data: null, loading: false, error: '',
@@ -279,18 +279,30 @@ function settingItem(item) {
 // Выбор из списка (например, актор Apify): сохраняем сразу при выборе,
 // следующий запуск уже идёт по-новому
 function choiceItem(item) {
+  // Свой список вместо <select>: системный выпадающий список в WebView
+  // телеграма рисуется светлым, и текст пунктов сливается с фоном
   const saving = st.savingKey === item.key;
+  const current = String(st.values[item.key] ?? item.value);
   return h('div', { class: 'field' },
     h('span', { class: 'field-label', text: item.label }),
-    h('select', {
-      class: 'input grow',
-      disabled: saving,
-      'data-focus-key': `set-${item.key}`,
-      onchange: (e) => { st.values[item.key] = e.target.value; saveItem(item); },
-    }, ...(item.options || []).map(o => h('option', {
-      value: o.value, text: o.label,
-      selected: String(st.values[item.key] ?? item.value) === o.value,
-    }))),
+    h('div', { class: 'choice', role: 'radiogroup', 'aria-label': item.label },
+      ...(item.options || []).map(o => {
+        const on = current === o.value;
+        return h('button', {
+          type: 'button', role: 'radio', class: 'choice-opt' + (on ? ' on' : ''),
+          'aria-checked': on ? 'true' : 'false',
+          disabled: saving,
+          onclick: () => {
+            if (on || saving) return;
+            st.values[item.key] = o.value;
+            saveItem(item);
+          },
+        },
+          h('span', { class: 'choice-dot', 'aria-hidden': 'true' }),
+          h('span', { class: 'choice-text', text: o.label }),
+        );
+      }),
+    ),
   );
 }
 
