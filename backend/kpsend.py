@@ -1,10 +1,12 @@
 """
 Сборка и отправка КП в Telegram — общее для бота и веб-API.
 """
+import io
 import logging
 import os
 import re
 
+import httpx
 from telegram import InputMediaPhoto
 
 from ai import build_options, build_title
@@ -196,6 +198,21 @@ async def send_kp(
                     chat_id=chat_id, text=rest_plain[i], parse_mode="HTML"
                 )
 
+    async def _download_photos(urls: list[str]) -> list[bytes]:
+        """Скачивает фотографии локально на сервер, если Telegram не может их забрать сам."""
+        downloaded = []
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            for u in urls:
+                try:
+                    resp = await client.get(u)
+                    if resp.status_code == 200 and resp.content:
+                        downloaded.append(resp.content)
+                    else:
+                        log.warning("Не удалось скачать фото %s: статус %s", u, resp.status_code)
+                except Exception as exc:
+                    log.warning("Ошибка при скачивании фото %s: %s", u, exc)
+        return downloaded
+
     async def _send(text: str) -> list[int]:
         if len(chosen) == 1:
             msg = await bot.send_photo(
@@ -204,6 +221,29 @@ async def send_kp(
             return [msg.message_id]
         media = [InputMediaPhoto(media=url) for url in chosen]
         media[0] = InputMediaPhoto(media=chosen[0], caption=text, parse_mode="HTML")
+        msgs = await bot.send_media_group(chat_id=chat_id, media=media)
+        return [m.message_id for m in msgs]
+
+    async def _send_bytes(text: str) -> list[int]:
+        """Отправка скачанных байтов напрямую в Telegram, если ссылки не открываются сервером TG."""
+        buffers = await _download_photos(chosen)
+        if not buffers:
+            raise RuntimeError("Не удалось скачать ни одну фотографию для отправки")
+        if len(buffers) == 1:
+            bio = io.BytesIO(buffers[0])
+            bio.name = "car.jpg"
+            msg = await bot.send_photo(
+                chat_id=chat_id, photo=bio, caption=text, parse_mode="HTML"
+            )
+            return [msg.message_id]
+        media = []
+        for i, b in enumerate(buffers):
+            bio = io.BytesIO(b)
+            bio.name = f"car_{i}.jpg"
+            if i == 0:
+                media.append(InputMediaPhoto(media=bio, caption=text, parse_mode="HTML"))
+            else:
+                media.append(InputMediaPhoto(media=bio))
         msgs = await bot.send_media_group(chat_id=chat_id, media=media)
         return [m.message_id for m in msgs]
 
@@ -218,17 +258,44 @@ async def send_kp(
     try:
         photo_msg_ids = await _send(caption)
     except Exception as first:
-        # Чаще всего причина — премиум-эмодзи: повторяем обычным текстом
-        log.warning("КП с премиум-эмодзи не ушло (%s), пробую обычным текстом", first)
-        try:
-            caption = caption_plain
-            photo_msg_ids = await _send(caption)
-        except Exception as second:
-            log.warning("Альбом не ушёл (%s), пробую одним фото", second)
-            msg = await bot.send_photo(
-                chat_id=chat_id, photo=chosen[0], caption=caption, parse_mode="HTML"
-            )
-            photo_msg_ids = [msg.message_id]
+        err_str = str(first)
+        log.warning("КП не ушло по URL ссылке (%s), проверяем причину", first)
+
+        is_download_err = any(k in err_str.lower() for k in ("webpage_curl_failed", "failed to get http url content"))
+
+        if is_download_err:
+            # Telegram не смог скачать фото по ссылке — скачиваем локально и шлём байтами
+            log.info("Telegram не смог забрать фото по URL (%s), скачиваем и шлём файлами напрямую", first)
+            try:
+                photo_msg_ids = await _send_bytes(caption)
+            except Exception as e_bytes:
+                log.warning("Отправка байтами с эмодзи не удалась (%s), пробуем обычным текстом", e_bytes)
+                try:
+                    photo_msg_ids = await _send_bytes(caption_plain)
+                except Exception as e_final:
+                    log.error("Отправка байтами не удалась (%s), шлём текстом без фото", e_final)
+                    await bot.send_message(chat_id=chat_id, text=caption_plain, parse_mode="HTML")
+                    photo_msg_ids = []
+        else:
+            # Возможно дело в премиум-эмодзи или альбоме
+            try:
+                caption = caption_plain
+                photo_msg_ids = await _send(caption)
+            except Exception as second:
+                log.warning("Альбом по ссылке не ушёл (%s), пробуем скачать и отправить байтами", second)
+                try:
+                    photo_msg_ids = await _send_bytes(caption)
+                except Exception as third:
+                    log.warning("Отправка альбома байтами не удалась (%s), пробуем одним фото", third)
+                    try:
+                        msg = await bot.send_photo(
+                            chat_id=chat_id, photo=chosen[0], caption=caption, parse_mode="HTML"
+                        )
+                        photo_msg_ids = [msg.message_id]
+                    except Exception as fourth:
+                        log.error("Все попытки отправить с фото исчерпаны (%s), шлём текстом", fourth)
+                        await bot.send_message(chat_id=chat_id, text=caption, parse_mode="HTML")
+                        photo_msg_ids = []
 
     await _send_rest(rest)
 
